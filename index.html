@@ -240,7 +240,16 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 .empty-state p{font-size:13px}
 
 /* NOTIF */
-.notif{position:fixed;bottom:20px;right:20px;background:var(--surface2);color:var(--text);padding:10px 16px;border-radius:var(--radius-lg);font-size:12px;z-index:99999;pointer-events:none;opacity:0;transition:opacity .2s;max-width:340px;border:1px solid var(--border2);font-family:var(--mono);box-shadow:0 4px 20px rgba(0,0,0,.4)}
+.xd-group{background:var(--surface);border:1px solid var(--border2);border-radius:var(--radius-lg);padding:14px;margin-bottom:10px}
+.xd-group-title{font-size:12px;font-weight:700;font-family:var(--mono);margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.xd-group-count{font-size:11px;color:var(--text3);font-weight:400}
+.xd-option{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:12px;cursor:pointer}
+.xd-option input[type=radio]{accent-color:var(--green)}
+.xd-option label{cursor:pointer;color:var(--text2)}
+.xd-existing{color:var(--green);font-weight:600}
+.xd-new{color:var(--amber);font-weight:600}
+.xd-preview{max-height:120px;overflow-y:auto;margin-top:8px;font-size:10px;font-family:var(--mono);color:var(--text3);border-top:1px solid var(--border);padding-top:6px}
+.notif{position:fixed;bottom:20px;right:20px.notif{position:fixed;bottom:20px;right:20px;background:var(--surface2);color:var(--text);padding:10px 16px;border-radius:var(--radius-lg);font-size:12px;z-index:99999;pointer-events:none;opacity:0;transition:opacity .2s;max-width:340px;border:1px solid var(--border2);font-family:var(--mono);box-shadow:0 4px 20px rgba(0,0,0,.4)}
 .notif.show{opacity:1}
 
 /* UPLOAD */
@@ -595,7 +604,21 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
       <button class="btn" onclick="closeOv('ov-create-depot')">Hủy</button>
     </div>
   </div>
+</
+<!-- CROSS-DEPOT IMPORT MODAL -->
+<div class="overlay" id="ov-xdepot" onclick="if(event.target===this){closeOv('ov-xdepot');pendingXImport=null;}">
+  <div class="modal" style="width:500px;max-height:85vh;overflow-y:auto">
+    <h3>📦 Phân loại Container theo Depot</h3>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:14px;font-family:var(--mono)" id="xd-summary"></div>
+    <div id="xd-groups"></div>
+    <div class="mbtns" style="margin-top:16px">
+      <button class="btn primary" id="xd-confirm-btn" onclick="executeXDepotImport()">✓ Xác nhận phân loại & Import</button>
+      <button class="btn" onclick="closeOv('ov-xdepot');pendingXImport=null;">Hủy</button>
+    </div>
+  </div>
 </div>
+
+div>
 
 <div class="tooltip" id="tooltip"></div>
 <div class="notif" id="notif"></div>
@@ -1592,7 +1615,31 @@ async function parseLegacyFormat(rows,headerRow){
     added++;
   }
 
-  await insertBatched(inserts,added,duplicates,skipped);
+  // Group by DP code for cross-depot import
+  const dpGroups = {};
+  for(const ins of inserts){
+    // Extract DP from remark (e.g. "B8.. | DP2")
+    const dpMatch = ins.remark && ins.remark.match(/\b(DP\d+)\b/i);
+    const dpCode = dpMatch ? dpMatch[1].toUpperCase() : (currentDepot?.code || 'DEFAULT');
+    if(!dpGroups[dpCode]) dpGroups[dpCode] = [];
+    dpGroups[dpCode].push({
+      cnum: ins.cnum, line: ins.line, size: ins.size,
+      grade: ins.grade, date: ins.date_in,
+      remark: ins.remark, estCost: ins.est_cost
+    });
+  }
+
+  const dpCodes = Object.keys(dpGroups);
+  if(dpCodes.length>1){
+    if(perm('canAdmin')||currentProfile?.role==='manager'){
+      notif('Phat hien '+dpCodes.length+' depot ('+dpCodes.join(', ')+') - Dang phan loai...');
+      await checkCrossDepot(dpGroups);
+    }else{
+      notif('File chua cont cua nhieu depot ('+dpCodes.join(', ')+') - Chi Admin/Manager duoc import');
+    }
+  }else{
+    await checkCrossDepot(dpGroups);
+  }
 }
 
 // Parser for standard format (with column headers)
@@ -1635,9 +1682,297 @@ async function parseStandardFormat(rows,headerRow){
     inserts.push({depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,est_cost:estCost,row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key,created_by:currentUser.id,updated_by:currentUser.id});
     added++;
   }
-  await insertBatched(inserts,added,duplicates,skipped);
+  // Group by DP code for cross-depot routing
+  const dpGroups2={};
+  for(const ins of inserts){
+    const dpM=ins.remark&&ins.remark.match(/\b(DP\d+)\b/i);
+    const dpC=dpM?dpM[1].toUpperCase():(currentDepot?.code||'DEFAULT');
+    if(!dpGroups2[dpC])dpGroups2[dpC]=[];
+    dpGroups2[dpC].push({cnum:ins.cnum,line:ins.line,size:ins.size,grade:ins.grade,date:ins.date_in,remark:ins.remark,estCost:ins.est_cost});
+  }
+  const dpCodes2=Object.keys(dpGroups2);
+  if(dpCodes2.length>1){
+    if(perm('canAdmin')||currentProfile?.role==='manager'){
+      notif('Phát hiện '+dpCodes2.length+' depot: '+dpCodes2.join(', ')+' — Mở phân loại...');
+      await checkCrossDepot(dpGroups2);
+    }else{
+      // FIX: Non-admin/manager CANNOT import cross-depot files
+      notif('File thuộc nhiều depot ('+dpCodes2.join(', ')+') — Chỉ Admin/Manager được import cross-depot');
+    }
+  }else{
+    // Single depot - use checkCrossDepot for DP validation
+    await checkCrossDepot(dpGroups2);
+  }
 }
 
+// ── CROSS-DEPOT IMPORT ──
+let pendingXImport = null;
+
+// FIX: doDirectImport was called but missing - import all rows to currentDepot
+async function doDirectImport(rows){
+  if(!rows||!rows.length){notif('Không có dữ liệu hợp lệ');return}
+  const{added,dup,skip}=await importRowsToDepot(rows,currentDepot);
+  await dbLog('add','Import '+added+' containers','Direct import');
+  renderAll();
+  notif('Import: '+added+(dup?' | '+dup+' dup':'')+(skip?' | '+skip+' err':''));
+}
+
+// Called after parsing rows - auto-detect cross-depot
+async function checkCrossDepot(parsedGroups){
+  const dpCodes = Object.keys(parsedGroups);
+
+  // Single depot group → import directly
+  if(dpCodes.length <= 1){
+    const rows = Object.values(parsedGroups)[0] || [];
+    // FIX: Check if DP matches currentDepot - warn if not
+    const dp = dpCodes[0];
+    const dpMatchesCurrent = !dp || dp==='DEFAULT' ||
+      currentDepot?.code?.toUpperCase()===dp.toUpperCase() ||
+      currentDepot?.name?.toUpperCase().includes(dp.toUpperCase());
+    if(!dpMatchesCurrent && !perm('canAdmin') && currentProfile?.role!=='manager'){
+      notif('File này thuộc '+dp+' nhưng bạn đang ở depot '+currentDepot?.code+' — không có quyền');
+      return;
+    }
+    if(!dpMatchesCurrent && (perm('canAdmin')||currentProfile?.role==='manager')){
+      if(!confirm('File nay chua cont cua '+dp+' nhung ban dang o '+currentDepot?.name+'. Van import vao depot hien tai?'))return;
+    }
+    await doDirectImport(rows);
+    return;
+  }
+
+  // Multi-depot detected - load existing depots
+  const{data:allDepots} = await sb.from('depots').select('*').order('created_at');
+  
+  // Build group info
+  const groups = {};
+  for(const dp of dpCodes){
+    const existingDepot = (allDepots||[]).find(d =>
+      d.code.toUpperCase() === dp.toUpperCase() ||
+      d.name.toUpperCase().includes(dp.toUpperCase())
+    );
+    groups[dp] = {
+      rows: parsedGroups[dp],
+      existingDepot: existingDepot || null,
+      action: existingDepot ? 'existing' : 'create',  // default
+      newDepotName: dp
+    };
+  }
+
+  pendingXImport = { groups, allDepots: allDepots||[] };
+  renderXDepotModal();
+  document.getElementById('ov-xdepot').style.display='flex';
+}
+
+function renderXDepotModal(){
+  if(!pendingXImport) return;
+  const { groups, allDepots } = pendingXImport;
+  const dpCodes = Object.keys(groups);
+  const totalConts = dpCodes.reduce((s,dp) => s + groups[dp].rows.length, 0);
+
+  document.getElementById('xd-summary').innerHTML =
+    `File chứa <b style="color:var(--green)">${totalConts} containers</b> thuộc <b>${dpCodes.length} depot</b>: ` +
+    dpCodes.map(dp => `<span style="color:var(--amber);font-family:var(--mono)">${dp}(${groups[dp].rows.length})</span>`).join(', ');
+
+  const groupsEl = document.getElementById('xd-groups');
+  groupsEl.innerHTML = '';
+
+  dpCodes.forEach(dp => {
+    const g = groups[dp];
+    const isCurrentDepot = g.existingDepot?.id === currentDepot?.id;
+    const div = document.createElement('div');
+    div.className = 'xd-group';
+
+    const statusBadge = g.existingDepot
+      ? `<span class="xd-existing">● Depot đã tồn tại: ${g.existingDepot.name}</span>`
+      : `<span class="xd-new">✦ Chưa có depot này</span>`;
+
+    div.innerHTML = `
+      <div class="xd-group-title">
+        <span style="font-family:var(--mono);color:var(--green)">${dp}</span>
+        <span class="xd-group-count">${g.rows.length} containers</span>
+        ${statusBadge}
+      </div>
+      ${g.existingDepot ? `
+        <div class="xd-option">
+          <input type="radio" name="xd-${dp}" id="xd-${dp}-existing" value="existing"
+            ${g.action==='existing'?'checked':''} onchange="setXDepotAction('${dp}','existing')">
+          <label for="xd-${dp}-existing">
+            Chuyển vào depot hiện có: <span style="color:var(--green);font-family:var(--mono)">${g.existingDepot.name} (${g.existingDepot.code})</span>
+          </label>
+        </div>
+        <div class="xd-option">
+          <input type="radio" name="xd-${dp}" id="xd-${dp}-create" value="create"
+            ${g.action==='create'?'checked':''} onchange="setXDepotAction('${dp}','create')">
+          <label for="xd-${dp}-create">
+            Tạo depot mới tên: <span style="color:var(--amber);font-family:var(--mono)">${dp}</span>
+          </label>
+        </div>
+      ` : `
+        <div class="xd-option">
+          <input type="radio" name="xd-${dp}" id="xd-${dp}-create" value="create" checked
+            onchange="setXDepotAction('${dp}','create')">
+          <label for="xd-${dp}-create">
+            Tạo depot mới: <span style="color:var(--amber);font-family:var(--mono)">${dp}</span>
+          </label>
+        </div>
+        <div class="xd-option">
+          <input type="radio" name="xd-${dp}" id="xd-${dp}-current" value="current"
+            onchange="setXDepotAction('${dp}','current')">
+          <label for="xd-${dp}-current">
+            Nhập vào depot hiện tại: <span style="color:var(--blue);font-family:var(--mono)">${currentDepot?.name}</span>
+          </label>
+        </div>
+      `}
+      <div class="xd-preview">
+        ${g.rows.slice(0,5).map(r => `${r.cnum} | ${r.grade} | ${r.size}`).join('<br>')}
+        ${g.rows.length > 5 ? `<br>... và ${g.rows.length-5} cont khác` : ''}
+      </div>`;
+    groupsEl.appendChild(div);
+  });
+}
+
+function setXDepotAction(dp, action){
+  if(!pendingXImport) return;
+  pendingXImport.groups[dp].action = action;
+}
+
+async function executeXDepotImport(){
+  if(!pendingXImport) return;
+  if(!perm('canAdmin')&&!perm('canAdd')){notif('Không có quyền');return}
+
+  const btn = document.getElementById('xd-confirm-btn');
+  btn.disabled = true; btn.textContent = 'Đang import...';
+
+  const { groups } = pendingXImport;
+  let totalAdded = 0, totalDup = 0, totalSkip = 0;
+
+  for(const [dp, g] of Object.entries(groups)){
+    let targetDepot = null;
+
+    if(g.action === 'existing' && g.existingDepot){
+      targetDepot = g.existingDepot;
+    } else if(g.action === 'current'){
+      targetDepot = currentDepot;
+    } else {
+      // Create new depot
+      // FIX: Check if depot with this code already exists (race condition)
+      const{data:existCheck}=await sb.from('depots').select('*')
+        .ilike('code',dp.trim()).maybeSingle();
+      if(existCheck){
+        targetDepot=existCheck;
+        notif('Depot '+dp+' đã tồn tại — dùng lại');
+      }else{
+        const{data:newDepot, error} = await sb.from('depots').insert({
+          name: dp,
+          code: dp.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,20),
+          rows: 20, bays: 33, tiers: 5
+        }).select().single();
+        if(error){
+          if(error.code==='23505'){
+            // Code collision - fetch existing
+            const{data:existing2}=await sb.from('depots').select('*').ilike('code',dp).maybeSingle();
+            targetDepot=existing2||currentDepot;
+          }else{
+            notif('Lỗi tạo depot '+dp+': '+error.message);
+            continue;
+          }
+        }else{
+          targetDepot = newDepot;
+        // FIX: If admin created new depot, update their profile depot_id temporarily
+        // so they can switch to it via depot switcher
+        }
+      }
+      // Refresh global depots so switcher shows new depot
+      const{data:freshDeps} = await sb.from('depots').select('*').order('created_at');
+      depots = freshDeps || [];
+      buildDepotSwitcher();
+    }
+
+    if(!targetDepot){ totalSkip += g.rows.length; continue; }
+
+    // Import rows into targetDepot
+    const {added, dup, skip} = await importRowsToDepot(g.rows, targetDepot);
+    totalAdded += added; totalDup += dup; totalSkip += skip;
+    // FIX: Log history to targetDepot, not currentDepot
+    if(currentDepot){
+      await sb.from('history').insert({
+        depot_id: targetDepot.id,
+        action_type:'add',
+        description:'Cross-depot import '+added+' containers → '+targetDepot.name,
+        detail:'dup: '+dup,
+        created_by: currentUser.id
+      });
+    }
+  }
+
+  closeOv('ov-xdepot');
+  pendingXImport = null;
+  btn.disabled = false; btn.textContent = 'Xác nhận Import';
+
+  // FIX: Reload depots list + current depot containers + restart realtime
+  const{data:freshDeps2}=await sb.from('depots').select('*').order('created_at');
+  depots=freshDeps2||[];
+  buildDepotSwitcher();
+  await loadContainers();
+  await loadHistory();
+  setupRealtime(); // FIX: restart realtime for potentially new depot
+  renderAll();
+  notif('✓ Cross-depot import: '+totalAdded+' containers'+(totalDup?' | '+totalDup+' dup':'')+(totalSkip?' | '+totalSkip+' err':''));
+}
+
+// Import a list of parsed rows into a specific depot
+async function importRowsToDepot(rows, targetDepot){
+  // Load existing cnums + slots for target depot
+  const{data:existing} = await sb.from('containers').select('cnum,slot_key').eq('depot_id', targetDepot.id);
+  const existingCnums = new Set((existing||[]).map(c=>c.cnum));
+  const occupiedSlots = new Set((existing||[]).map(c=>c.slot_key));
+
+  const tRows = targetDepot.rows || 20;
+  const tBays = targetDepot.bays || 33;
+  const tTiers = targetDepot.tiers || 5;
+
+  function findSlot(){
+    for(let r=1;r<=tRows;r++)
+      for(let b=1;b<=tBays;b++)
+        for(let t=1;t<=tTiers;t++){
+          if(t>1&&!occupiedSlots.has(sk(r,b,t-1)))break;
+          const key=sk(r,b,t);
+          if(!occupiedSlots.has(key))return{r,b,t};
+        }
+    return null;
+  }
+
+  let added=0, dup=0, skip=0;
+  const inserts=[];
+
+  for(const row of rows){
+    if(existingCnums.has(row.cnum)){dup++;continue}
+    const slot = findSlot();
+    if(!slot){skip++;continue}
+    const key = sk(slot.r,slot.b,slot.t);
+    occupiedSlots.add(key); existingCnums.add(row.cnum);
+    inserts.push({
+      depot_id: targetDepot.id,
+      cnum: row.cnum, line: row.line, size: row.size,
+      grade: row.grade, date_in: row.date,
+      remark: row.remark || null,
+      est_cost: row.estCost || null,
+      row_label: 'R'+String(slot.r).padStart(2,'0'),
+      bay: slot.b, tier: slot.t, slot_key: key,
+      created_by: currentUser.id, updated_by: currentUser.id
+    });
+    added++;
+  }
+
+  for(let i=0;i<inserts.length;i+=100){
+    const batch=inserts.slice(i,i+100);
+    const{error}=await sb.from('containers').insert(batch);
+    if(error&&error.code!=='23505') notif('Batch error: '+error.message);
+  }
+  return {added, dup, skip};
+}
+
+// ── CROSS-DEPOT IMPORT ──
 // Shared helpers
 async function loadExistingCnums(){
   const{data}=await sb.from('containers').select('cnum').eq('depot_id',currentDepot.id);
