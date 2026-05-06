@@ -1107,7 +1107,7 @@ async function clearHistory(){
 }
 
 // ── ADMIN ──
-function showView(v){
+async function showView(v){
   ['yard','kpi','history','admin'].forEach(n=>{
     const el=document.getElementById('view-'+n);
     if(el){el.style.display=n===v?'flex':'none';if(n===v)el.classList.add('active');else el.classList.remove('active')}
@@ -1119,7 +1119,7 @@ function showView(v){
   document.getElementById('statbar').style.display=v==='yard'?'':'none';
   if(v==='kpi')renderKPI();
   if(v==='history'){loadHistory().then(()=>renderHistView())}
-  if(v==='admin')loadAdminData();
+  if(v==='admin')await loadAdminData();
 }
 async function loadAdminData(){
   const{data:users}=await sb.from('profiles').select('*').order('created_at');
@@ -1134,14 +1134,9 @@ async function loadAdminData(){
     <td><span style="color:${u.active?'var(--green)':'var(--red)'}">● ${u.active?'Active':'Inactive'}</span></td>
     <td><button class="btn danger" style="padding:3px 8px;font-size:10px" onclick="toggleUser('${u.id}',${u.active})">${u.active?'Deactivate':'Activate'}</button></td>
   </tr>`).join('');
-  const{data:deps}=await sb.from('depots').select('*');
-  const dtbody=document.getElementById('depot-tbody');
-  dtbody.innerHTML=(deps||[]).map(d=>`<tr>
-    <td style="font-weight:600">${d.name}</td>
-    <td style="font-family:var(--mono)">${d.code}</td>
-    <td>${d.rows}</td><td>${d.bays}</td><td>${d.tiers}</td>
-    <td><button class="btn danger" style="padding:3px 8px;font-size:10px" onclick="deleteDepot('${d.id}','${d.name}','${d.code}')">Xóa</button></td>
-  </tr>`).join('');
+  const{data:deps}=await sb.from('depots').select('*').order('created_at');
+  depots=deps||[];
+  await renderAdminDepotTable(deps);
 }
 async function toggleUser(id,active){
   await sb.from('profiles').update({active:!active}).eq('id',id);
@@ -1187,28 +1182,42 @@ async function deleteDepot(id,name,code){
   if(!perm('canAdmin')){notif('Không có quyền');return}
   if(code==='DEPOT3'){notif('Không thể xóa depot mặc định');return}
   if(!confirm('Xóa depot "'+name+'"? Toàn bộ container trong depot này sẽ bị xóa.'))return;
-  // Delete containers first
-  await sb.from('containers').delete().eq('depot_id',id);
-  await sb.from('moves').delete().eq('depot_id',id);
-  await sb.from('history').delete().eq('depot_id',id);
-  const{error}=await sb.from('depots').delete().eq('id',id);
-  if(error){notif('Lỗi: '+error.message);return}
-  notif('Đã xóa depot: '+name);
-  // Reload depots list
-  const{data:deps}=await sb.from('depots').select('*').order('created_at');
-  depots=deps||[];
-  // If deleted current depot, switch to first available
-  if(currentDepot?.id===id){
-    currentDepot=depots[0];
-    if(currentDepot){
-      ROWS=currentDepot.rows;BAYS=currentDepot.bays;TIERS=currentDepot.tiers;CAP=ROWS*BAYS*TIERS;
-      C={};moves=[];
-      await loadContainers();
-      renderAll();renderPlan();
+  notif('Đang xóa...');
+  try{
+    await sb.from('containers').delete().eq('depot_id',id);
+    await sb.from('moves').delete().eq('depot_id',id);
+    await sb.from('history').delete().eq('depot_id',id);
+    const{error}=await sb.from('depots').delete().eq('id',id);
+    if(error){notif('Lỗi xóa depot: '+error.message);return}
+    // Force reload depots from DB
+    const{data:freshDeps}=await sb.from('depots').select('*').order('created_at');
+    depots=freshDeps||[];
+    // Switch depot if deleted current
+    if(currentDepot?.id===id){
+      currentDepot=depots[0]||null;
+      if(currentDepot){
+        ROWS=currentDepot.rows;BAYS=currentDepot.bays;TIERS=currentDepot.tiers;CAP=ROWS*BAYS*TIERS;
+        C={};moves=[];
+        await loadContainers();
+        renderAll();renderPlan();
+      }
     }
-  }
-  buildDepotSwitcher();
-  await loadAdminData();
+    buildDepotSwitcher();
+    // Force re-render admin table with fresh data
+    await renderAdminDepotTable(depots);
+    notif('Đã xóa depot: '+name);
+  }catch(e){notif('Lỗi: '+e.message)}
+}
+
+async function renderAdminDepotTable(deps){
+  const dtbody=document.getElementById('depot-tbody');
+  if(!dtbody)return;
+  dtbody.innerHTML=(deps||[]).map(d=>`<tr>
+    <td style="font-weight:600">${d.name}</td>
+    <td style="font-family:var(--mono)">${d.code}</td>
+    <td>${d.rows}</td><td>${d.bays}</td><td>${d.tiers}</td>
+    <td><button class="btn danger" style="padding:3px 8px;font-size:10px" onclick="deleteDepot('${d.id}','${d.name}','${d.code}')">Xóa</button></td>
+  </tr>`).join('') || '<tr><td colspan="6" style="color:var(--text3);padding:12px;font-family:var(--mono)">No depots</td></tr>';
 }
 
 // ── IMPORT ──
