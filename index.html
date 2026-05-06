@@ -370,6 +370,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
     <div class="stat sn"><b id="s-out">0</b>OUT</div>
     <div class="stat sn"><b id="s-total">0</b>Total</div>
     <div class="stat sn"><b id="s-occ">0%</b>Occ.</div>
+    <div class="stat sn" style="border-color:#1E3A5F"><b id="s-rf" style="color:#60A5FA">0</b>Reefer</div>
     <div class="stat sn"><b id="s-aging">0</b>Aging</div>
   </div>
 
@@ -487,8 +488,16 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
       <div class="mrow" style="grid-column:1/-1"><label>Container No.</label><input id="a-cnum" placeholder="CMAU1234567" oninput="this.value=this.value.toUpperCase()"></div>
       <div class="mrow"><label>Shipping Line</label>
         <select id="a-line"><option>CMA CGM</option><option>MSC</option><option>Hapag-Lloyd</option><option>ZIM</option><option>COSCO</option><option>Other</option></select></div>
-      <div class="mrow"><label>Size</label>
-        <select id="a-size"><option value="20">20'</option><option value="40">40'</option></select></div>
+      <div class="mrow"><label>Size / Type</label>
+        <select id="a-size">
+          <option value="20DC">20DC — 20' Dry</option>
+          <option value="20RF">20RF — 20' Reefer HC</option>
+          <option value="40DC">40DC — 40' Dry</option>
+          <option value="40HC" selected>40HC — 40' HC Dry</option>
+          <option value="40RF">40RF — 40' HC Reefer</option>
+          <option value="45HC">45HC — 45' HC Dry</option>
+          <option value="45RF">45RF — 45' HC Reefer</option>
+        </select></div>
       <div class="mrow" style="grid-column:1/-1"><label>Grade</label>
         <select id="a-grade">
           <option value="A">A — Ready</option><option value="B">B — Usable</option>
@@ -604,6 +613,7 @@ const LCLR={'CMA CGM':'#60A5FA','MSC':'#4ADE80','Hapag-Lloyd':'#FBBF24','ZIM':'#
 const GRADES=['A','B','C','D','E','OUT'];
 const GRADE_CLR={A:'#4ADE80',B:'#60A5FA',C:'#FBBF24',D:'#F87171',E:'#A78BFA',OUT:'#94A3B8'};
 const GRADE_BG={A:'#0F2318',B:'#0F1F35',C:'#271F0A',D:'#2A0F0F',E:'#1A1035',OUT:'#1A1F24'};
+const SIZES=['20DC','20RF','40DC','40HC','40RF','45HC','45RF'];
 const GRADE_LABEL={A:'Ready',B:'Usable',C:'Minor DMG',D:'Heavy DMG',E:'In Repair',OUT:'Out'};
 const ROLE_PERMS={
   admin:{canAdd:true,canEdit:true,canMove:true,canGrade:true,canDelete:true,canAdmin:true},
@@ -1069,6 +1079,7 @@ function renderGrid(){
       if(c&&!hidden&&!faded){
         div.style.background=GRADE_BG[c.grade];
         div.style.borderColor=GRADE_CLR[c.grade];div.style.borderWidth='1.5px';
+        if(c.size&&c.size.includes('RF'))div.style.boxShadow='inset 0 0 0 2px rgba(96,165,250,.5)';
         if(c.hl)div.classList.add('hl');
         if(key===moveFrom)div.classList.add('src');
         if(searchKeys.has(key))div.classList.add('found');
@@ -1156,7 +1167,10 @@ function renderStats(){
   document.getElementById('s-out').textContent=all.filter(c=>c.grade==='OUT').length;
   document.getElementById('s-total').textContent=total;
   document.getElementById('s-occ').textContent=Math.round(total/CAP*100)+'%';
+  document.getElementById('s-moves').textContent=moves.length;
   document.getElementById('s-aging').textContent=all.filter(c=>daysSince(c.date_in)>=14).length;
+  const rfEl=document.getElementById('s-rf');
+  if(rfEl)rfEl.textContent=all.filter(c=>c.size&&c.size.includes('RF')).length;
 }
 
 // ── KPI ──
@@ -1212,6 +1226,7 @@ async function renderKPI(){
       <div class="kpi-card" style="border-color:var(--cd-b)"><div class="kpi-label">Damaged (C+D)</div><div class="kpi-value" style="color:var(--red)">${dmg}</div><div class="kpi-sub">${Math.round(dmg/Math.max(total,1)*100)}% of total</div></div>
       <div class="kpi-card" style="border-color:var(--ce-b)"><div class="kpi-label">In Repair (E)</div><div class="kpi-value" style="color:var(--purple)">${repair}</div><div class="kpi-sub">Đang sửa chữa</div></div>
       <div class="kpi-card" style="border-color:#4A3510"><div class="kpi-label">Aging ≥14 ngày</div><div class="kpi-value" style="color:var(--amber)">${aging14}</div><div class="kpi-sub">Đỏ (≥20d): ${aging20}</div></div>
+      <div class="kpi-card" style="border-color:#1E3A5F"><div class="kpi-label">Reefer (RF)</div><div class="kpi-value" style="color:var(--blue)">${all.filter(c=>c.size&&c.size.includes('RF')).length}</div><div class="kpi-sub">Dry: ${all.filter(c=>!c.size||!c.size.includes('RF')).length}</div></div>
       <div class="kpi-card"><div class="kpi-label">Planned Moves</div><div class="kpi-value">${moves.length}</div><div class="kpi-sub">Confirmed: ${moves.filter(m=>m.confirmed).length}</div></div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
@@ -1428,14 +1443,240 @@ async function renderAdminDepotTable(deps){
 }
 
 // ── IMPORT ──
-function matchLine(raw){const r=(raw||'').toUpperCase();if(r.includes('CMA'))return'CMA CGM';if(r.includes('MSC'))return'MSC';if(r.includes('HAPAG')||r.includes('LLOYD'))return'Hapag-Lloyd';if(r.includes('ZIM'))return'ZIM';if(r.includes('COSCO'))return'COSCO';return'Other'}
-function matchGrade(raw){const r=(raw||'').trim().toUpperCase().charAt(0);return['A','B','C','D','E'].includes(r)?r:raw.toUpperCase().includes('OUT')?'OUT':'B'}
+function matchLine(raw){
+  const r=(raw||'').toUpperCase().trim();
+  if(r==='HPL'||r.includes('HAPAG')||r.includes('LLOYD'))return'Hapag-Lloyd';
+  if(r==='CMA'||r.includes('CMA CGM'))return'CMA CGM';
+  if(r==='MSC'||r.includes('MSC'))return'MSC';
+  if(r==='ZIM'||r.includes('ZIM'))return'ZIM';
+  if(r==='COSCO'||r.includes('COSCO')||r==='OOCL')return'COSCO';
+  return'Other';
+}
+function matchGrade(raw){
+  const r=(raw||'').toString().trim().toUpperCase();
+  if(['A','B','C','D','E'].includes(r.charAt(0)))return r.charAt(0);
+  if(r.includes('OUT'))return'OUT';
+  return'D';
+}
+function matchSize(raw){
+  const r=(raw||'').toString().trim().toUpperCase().replace(/\s/g,'');
+  if(r==='4500')return'40HC';
+  if(r==='4530')return'40RF';
+  if(r==='2200')return'20DC';
+  if(r==='2230')return'20RF';
+  if(r==='4040'||r==="40'DC"||r==='40DC')return'40DC';
+  if(r==='40HC'||r==="40'HC")return'40HC';
+  if(r==='40RF'||r==="40'RF"||r==='40RH')return'40RF';
+  if(r==='2020'||r==="20'DC"||r==='20DC'||r==="20'")return'20DC';
+  if(r==='20RF'||r==="20'RF")return'20RF';
+  if(r==='45HC'||r==="45'HC")return'45HC';
+  if(r==='45RF'||r==="45'RF")return'45RF';
+  if(r.startsWith('22'))return'20DC';
+  if(r.startsWith('42')||r.startsWith('45'))return'40HC';
+  return'40HC';
+}
+
+function parseDate(raw){
+  if(!raw)return null;
+  const s=raw.toString().trim();
+  // DD/MM/YYYY HH:MM or DD/MM/YYYY
+  const m=s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if(m)return`${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  // YYYY-MM-DD
+  if(/^\d{4}-\d{2}-\d{2}/.test(s))return s.slice(0,10);
+  return null;
+}
+
 function handleFile(e){
   const file=e.target.files[0];if(!file)return;e.target.value='';
-  if(file.name.toLowerCase().endsWith('.csv')){const fr=new FileReader();fr.onload=ev=>parseCSV(ev.target.result);fr.readAsText(file,'UTF-8')}
-  else{const fr=new FileReader();fr.onload=ev=>{try{const wb=XLSX.read(ev.target.result,{type:'binary'});const ws=wb.Sheets[wb.SheetNames[0]];parseRows(XLSX.utils.sheet_to_json(ws,{header:1,raw:false}))}catch(err){notif('Lỗi: '+err.message)}};fr.readAsBinaryString(file)}
+  if(file.name.toLowerCase().endsWith('.csv')){
+    const fr=new FileReader();
+    fr.onload=ev=>parseCSV(ev.target.result);
+    fr.readAsText(file,'UTF-8');
+  }else{
+    const fr=new FileReader();
+    fr.onload=ev=>{
+      try{
+        const wb=XLSX.read(ev.target.result,{type:'binary'});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,defval:''});
+        // Auto-detect format: Phuc Long/Giang Nam legacy vs standard
+        detectAndParse(rows);
+      }catch(err){notif('Lỗi đọc file: '+err.message)}
+    };
+    fr.readAsBinaryString(file);
+  }
 }
-function parseCSV(text){parseRows(text.split('\n').map(r=>r.split(',').map(c=>c.trim().replace(/^"|"$/g,''))))}
+function parseCSV(text){
+  const rows=text.split('\n').map(r=>r.split(',').map(c=>c.trim().replace(/^"|"$/g,'')));
+  detectAndParse(rows);
+}
+
+// Auto-detect file format and route to correct parser
+function detectAndParse(rows){
+  if(!rows||!rows.length)return;
+  // Find header row - look for row containing 'SoáContainer' or 'Container' or 'cnum'
+  let headerRow=-1;
+  for(let i=0;i<Math.min(rows.length,15);i++){
+    const rowStr=rows[i].join('|').toLowerCase();
+    if(rowStr.includes('soácontainer')||rowStr.includes('container')||rowStr.includes('cnum')||rowStr.includes('số cont')){
+      headerRow=i;break;
+    }
+  }
+  if(headerRow>=0){
+    // Legacy Phuc Long / Giang Nam format (fixed column positions)
+    const hdr=rows[headerRow];
+    const isLegacy=hdr.some(h=>String(h).includes('Soá')||String(h).includes('Bay/Row')||String(h).includes('Ngaøy'));
+    if(isLegacy){
+      parseLegacyFormat(rows,headerRow);
+    }else{
+      parseStandardFormat(rows,headerRow);
+    }
+  }else{
+    // No header found - try standard parse from row 0
+    parseStandardFormat(rows,0);
+  }
+}
+
+// Parser for Phuc Long/Giang Nam legacy Excel format
+async function parseLegacyFormat(rows,headerRow){
+  // Fixed column positions based on actual file structure:
+  // col0=Stt, col1=ContNo, col4=Size, col5=Line, col6=DateIn
+  // col8=ST(grade), col9=BayRow, col13=Remark, col14=Days, col15=DP, col17=EstCost
+  const COL={cnum:1,size:4,line:5,date:6,grade:8,bayrow:9,khachhang:11,pa:12,remark:13,days:14,dp:15,estcost:17};
+
+  const existingConts=await loadExistingCnums();
+  const occupiedSlots=await loadOccupiedSlots();
+
+  let added=0,skipped=0,duplicates=0;
+  const inserts=[];
+
+  for(let i=headerRow+1;i<rows.length;i++){
+    const row=rows[i];
+    if(!row||row.length<2)continue;
+
+    const cnum=String(row[COL.cnum]||'').trim().toUpperCase().replace(/\s/g,'');
+    if(!cnum||cnum.length<4||!/^[A-Z]{4}\d/.test(cnum))continue;
+    if(existingConts.has(cnum)){duplicates++;continue}
+
+    const line=matchLine(String(row[COL.line]||''));
+    const size=matchSize(String(row[COL.size]||''));
+    const grade=matchGrade(String(row[COL.grade]||'D'));
+    const date=parseDate(String(row[COL.date]||''));
+    const bayrow=String(row[COL.bayrow]||'').trim();
+    const remark=String(row[COL.remark]||'').trim()||null;
+    const dp=String(row[COL.dp]||'').trim();
+    const estCostRaw=String(row[COL.estcost]||'').trim();
+    const estCost=estCostRaw&&!isNaN(parseFloat(estCostRaw))?parseFloat(estCostRaw):null;
+
+    // Build enhanced remark with bay/row info
+    let fullRemark=remark||'';
+    if(bayrow&&bayrow!=='0')fullRemark=(bayrow+(fullRemark?' | '+fullRemark:'')).trim();
+    if(dp&&dp!=='0')fullRemark=(fullRemark?fullRemark+' | ':'')+dp;
+
+    // Find free slot
+    const slot=findNextFreeSlot(occupiedSlots);
+    if(!slot){skipped++;continue}
+    const key=sk(slot.r,slot.b,slot.t);
+    occupiedSlots.add(key);
+    existingConts.add(cnum);
+
+    inserts.push({
+      depot_id:currentDepot.id,cnum,line,size,grade,
+      date_in:date,remark:fullRemark||null,
+      est_cost:estCost,
+      row_label:'R'+String(slot.r).padStart(2,'0'),
+      bay:slot.b,tier:slot.t,slot_key:key,
+      created_by:currentUser.id,updated_by:currentUser.id
+    });
+    added++;
+  }
+
+  await insertBatched(inserts,added,duplicates,skipped);
+}
+
+// Parser for standard format (with column headers)
+async function parseStandardFormat(rows,headerRow){
+  const hdr=rows[headerRow].map(h=>String(h||'').toLowerCase().trim());
+  const fi=kws=>hdr.findIndex(h=>kws.some(k=>h.includes(k)));
+  const idx={
+    cnum:fi(['container','cnum','cont','number','soá','số']),
+    line:fi(['line','shipping','carrier','hang','hãng']),
+    size:fi(['size','teu','type']),
+    grade:fi(['grade','cond','status','st','tinh','tình']),
+    date:fi(['date','ngay','ngày','date_in']),
+    slot:fi(['slot','position','bay/row','vi tri','vị trí']),
+    remark:fi(['remark','note','ghi','comment','ghi chú']),
+    estcost:fi(['est total','est_cost','cost','chi phi','chi phí'])
+  };
+
+  const existingConts=await loadExistingCnums();
+  const occupiedSlots=await loadOccupiedSlots();
+  let added=0,skipped=0,duplicates=0;
+  const inserts=[];
+
+  for(let i=headerRow+1;i<rows.length;i++){
+    const row=rows[i];if(!row||row.every(c=>!String(c).trim()))continue;
+    const cnum=(idx.cnum>=0?String(row[idx.cnum]||''):'').trim().toUpperCase().replace(/\s/g,'');
+    if(!cnum||cnum.length<4)continue;
+    if(existingConts.has(cnum)){duplicates++;continue}
+    const line=matchLine(idx.line>=0?String(row[idx.line]||''):'');
+    const sr=(idx.size>=0?String(row[idx.size]||'40'):'40').replace(/[^0-9]/g,'');
+    const size=sr==='20'?'20':'40';
+    const grade=matchGrade(idx.grade>=0?String(row[idx.grade]||'B'):'B');
+    const date=parseDate(idx.date>=0?String(row[idx.date]||''):'');
+    const remark=(idx.remark>=0?String(row[idx.remark]||''):'').trim()||null;
+    const estCostRaw=idx.estcost>=0?String(row[idx.estcost]||'').trim():'';
+    const estCost=estCostRaw&&!isNaN(parseFloat(estCostRaw))?parseFloat(estCostRaw):null;
+    const slot=findNextFreeSlot(occupiedSlots);
+    if(!slot){skipped++;continue}
+    const key=sk(slot.r,slot.b,slot.t);
+    occupiedSlots.add(key);existingConts.add(cnum);
+    inserts.push({depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,est_cost:estCost,row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key,created_by:currentUser.id,updated_by:currentUser.id});
+    added++;
+  }
+  await insertBatched(inserts,added,duplicates,skipped);
+}
+
+// Shared helpers
+async function loadExistingCnums(){
+  const{data}=await sb.from('containers').select('cnum').eq('depot_id',currentDepot.id);
+  return new Set((data||[]).map(c=>c.cnum));
+}
+async function loadOccupiedSlots(){
+  const{data}=await sb.from('containers').select('slot_key').eq('depot_id',currentDepot.id);
+  return new Set((data||[]).map(c=>c.slot_key));
+}
+function findNextFreeSlot(occupiedSet){
+  for(let r=1;r<=ROWS;r++){
+    for(let b=1;b<=BAYS;b++){
+      for(let t=1;t<=TIERS;t++){
+        if(t>1&&!occupiedSet.has(sk(r,b,t-1)))break;
+        const key=sk(r,b,t);
+        if(!occupiedSet.has(key))return{r,b,t};
+      }
+    }
+  }
+  return null;
+}
+async function insertBatched(inserts,added,duplicates,skipped){
+  if(inserts.length){
+    for(let i=0;i<inserts.length;i+=100){
+      const batch=inserts.slice(i,i+100);
+      const{data:bData,error}=await sb.from('containers').insert(batch).select();
+      if(error){
+        if(error.code==='23505')continue;
+        else{notif('DB error: '+error.message);return}
+      }
+      (bData||[]).forEach(d=>{
+        if(C[d.slot_key])C[d.slot_key].id=d.id;
+      });
+    }
+    await dbLog('add',`Import ${added} containers`,`Duplicates: ${duplicates}`);
+  }
+  renderAll();
+  notif(`✓ Import: ${added}${duplicates?' | '+duplicates+' dup':''}${skipped?' | '+skipped+' err':''}`);
+}
 async function parseRows(rows){
   if(!rows||!rows.length)return;
   const hdr=rows[0].map(h=>String(h||'').toLowerCase().trim());
