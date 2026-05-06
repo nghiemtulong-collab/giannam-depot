@@ -289,7 +289,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
         <span id="depot-name-text">Depot 3</span>
         <svg id="depot-arrow" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display:none;flex-shrink:0"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
-      <div id="depot-menu" style="display:none;position:absolute;top:calc(100% + 4px);left:0;background:var(--surface);border:1px solid var(--border2);border-radius:var(--radius-lg);box-shadow:0 4px 20px rgba(0,0,0,.5);min-width:220px;z-index:999;overflow:hidden">
+      <div id="depot-menu" style="display:none;position:fixed;background:var(--surface);border:1px solid var(--border2);border-radius:var(--radius-lg);box-shadow:0 4px 24px rgba(0,0,0,.7);min-width:240px;z-index:99999;overflow:hidden">
         <div style="padding:6px 10px;font-size:9px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;letter-spacing:.6px;border-bottom:1px solid var(--border)">Chọn Depot</div>
         <div id="depot-menu-items"></div>
       </div>
@@ -456,7 +456,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Thêm Depot
           </button>
           <table class="user-table" id="depot-table">
-            <thead><tr><th>Tên Depot</th><th>Code</th><th>Rows</th><th>Bays</th><th>Tiers</th></tr></thead>
+            <thead><tr><th>Tên Depot</th><th>Code</th><th>Rows</th><th>Bays</th><th>Tiers</th><th>Thao tác</th></tr></thead>
             <tbody id="depot-tbody"><tr><td colspan="5" style="text-align:center;color:var(--text3);padding:20px;font-family:var(--mono)">Loading...</td></tr></tbody>
           </table>
         </div>
@@ -1135,7 +1135,12 @@ async function loadAdminData(){
   </tr>`).join('');
   const{data:deps}=await sb.from('depots').select('*');
   const dtbody=document.getElementById('depot-tbody');
-  dtbody.innerHTML=(deps||[]).map(d=>`<tr><td style="font-weight:600">${d.name}</td><td style="font-family:var(--mono)">${d.code}</td><td>${d.rows}</td><td>${d.bays}</td><td>${d.tiers}</td></tr>`).join('');
+  dtbody.innerHTML=(deps||[]).map(d=>`<tr>
+    <td style="font-weight:600">${d.name}</td>
+    <td style="font-family:var(--mono)">${d.code}</td>
+    <td>${d.rows}</td><td>${d.bays}</td><td>${d.tiers}</td>
+    <td><button class="btn danger" style="padding:3px 8px;font-size:10px" onclick="deleteDepot('${d.id}','${d.name}','${d.code}')">Xóa</button></td>
+  </tr>`).join('');
 }
 async function toggleUser(id,active){
   await sb.from('profiles').update({active:!active}).eq('id',id);
@@ -1174,6 +1179,32 @@ async function createDepot(){
   closeOv('ov-create-depot');loadAdminData();notif('Tạo depot: '+name);
 }
 function openCreateDepot(){document.getElementById('ov-create-depot').style.display='flex'}
+async function deleteDepot(id,name,code){
+  if(code==='DEPOT3'){notif('Không thể xóa depot mặc định');return}
+  if(!confirm('Xóa depot "'+name+'"? Toàn bộ container trong depot này sẽ bị xóa.'))return;
+  // Delete containers first
+  await sb.from('containers').delete().eq('depot_id',id);
+  await sb.from('moves').delete().eq('depot_id',id);
+  await sb.from('history').delete().eq('depot_id',id);
+  const{error}=await sb.from('depots').delete().eq('id',id);
+  if(error){notif('Lỗi: '+error.message);return}
+  // Reload depots list
+  const{data:deps}=await sb.from('depots').select('*').order('created_at');
+  depots=deps||[];
+  // If deleted current depot, switch to first available
+  if(currentDepot?.id===id){
+    currentDepot=depots[0];
+    if(currentDepot){
+      ROWS=currentDepot.rows;BAYS=currentDepot.bays;TIERS=currentDepot.tiers;CAP=ROWS*BAYS*TIERS;
+      C={};moves=[];
+      await loadContainers();
+      renderAll();renderPlan();
+    }
+  }
+  buildDepotSwitcher();
+  loadAdminData();
+  notif('Đã xóa depot: '+name);
+}
 
 // ── IMPORT ──
 function matchLine(raw){const r=(raw||'').toUpperCase();if(r.includes('CMA'))return'CMA CGM';if(r.includes('MSC'))return'MSC';if(r.includes('HAPAG')||r.includes('LLOYD'))return'Hapag-Lloyd';if(r.includes('ZIM'))return'ZIM';if(r.includes('COSCO'))return'COSCO';return'Other'}
@@ -1289,7 +1320,15 @@ function buildDepotSwitcher(){
 function toggleDepotMenu(){
   if(!['admin','manager'].includes(currentProfile?.role))return;
   const menu=document.getElementById('depot-menu');
-  menu.style.display=menu.style.display==='none'?'block':'none';
+  if(menu.style.display==='none'){
+    const btn=document.getElementById('depot-name');
+    const rect=btn.getBoundingClientRect();
+    menu.style.top=(rect.bottom+4)+'px';
+    menu.style.left=rect.left+'px';
+    menu.style.display='block';
+  }else{
+    menu.style.display='none';
+  }
 }
 
 async function switchDepot(depotId){
