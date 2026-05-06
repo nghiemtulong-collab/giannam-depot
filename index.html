@@ -416,7 +416,9 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 
     <!-- KPI VIEW -->
     <div class="view" id="view-kpi">
-      <div class="kpi-wrap" id="kpi-wrap"></div>
+      <div class="kpi-wrap" id="kpi-wrap">
+      <div style="padding:20px;text-align:center;color:var(--text3);font-family:var(--mono)">Loading KPI...</div>
+    </div>
     </div>
 
     <!-- HISTORY VIEW -->
@@ -442,9 +444,17 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
       <div class="admin-wrap">
         <div class="admin-section">
           <div class="admin-title">Quản lý tài khoản</div>
-          <button class="btn primary" onclick="openCreateUser()" style="margin-bottom:12px">
+          <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+          <button class="btn primary" onclick="openCreateUser()">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Tạo tài khoản mới
           </button>
+          <button class="btn" onclick="backupAllData()" style="border-color:var(--green);color:var(--green)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>Backup toàn bộ DB
+          </button>
+          <button class="btn" onclick="showDbStats()" style="border-color:var(--blue);color:var(--blue)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>DB Stats
+          </button>
+          </div>
           <table class="user-table" id="user-table">
             <thead><tr><th>Họ tên</th><th>Email</th><th>Role</th><th>Depot</th><th>Trạng thái</th><th>Thao tác</th></tr></thead>
             <tbody id="user-tbody"><tr><td colspan="6" style="text-align:center;color:var(--text3);padding:20px;font-family:var(--mono)">Loading...</td></tr></tbody>
@@ -505,6 +515,10 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
     <div class="mrow" id="d-remark-row">
       <label>Remark</label>
       <textarea id="d-remark" rows="3"></textarea>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px" id="d-cost-row">
+      <div class="mrow"><label>Est. Cost (USD)</label><input type="number" id="d-est-cost" placeholder="0" min="0" step="10"></div>
+      <div class="mrow"><label>Actual Cost (USD)</label><input type="number" id="d-actual-cost" placeholder="0" min="0" step="10"></div>
     </div>
     <div class="mbtns" id="d-btns">
       <button class="btn primary" onclick="saveDetail()" id="d-save">Lưu</button>
@@ -657,6 +671,60 @@ async function initApp(user){
   await loadHistory();
   buildQGPanel();
   renderAll();
+  // SPRINT2: Subscribe to realtime changes
+  setupRealtime();
+}
+
+// SPRINT2A: Realtime sync
+let realtimeChannel=null;
+function setupRealtime(){
+  if(realtimeChannel)realtimeChannel.unsubscribe();
+  if(!currentDepot)return;
+  realtimeChannel=sb.channel('depot-'+currentDepot.id)
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'containers',filter:'depot_id=eq.'+currentDepot.id},
+      payload=>{
+        const d=payload.new;
+        const key=d.slot_key||sk(+d.row_label?.replace(/\D/g,'')||1,d.bay||1,d.tier||1);
+        if(!C[key]){
+          C[key]={...d,key,r:+d.row_label?.replace(/\D/g,'')||1,b:d.bay||1,t:d.tier||1};
+          renderGrid();renderStats();renderLegend();
+          showSyncBadge('+ '+d.cnum+' added by teammate');
+        }
+      })
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'containers',filter:'depot_id=eq.'+currentDepot.id},
+      payload=>{
+        const d=payload.new;
+        const key=d.slot_key||sk(+d.row_label?.replace(/\D/g,'')||1,d.bay||1,d.tier||1);
+        // Remove from old slot if moved
+        const oldKey=Object.keys(C).find(k=>C[k].id===d.id);
+        if(oldKey&&oldKey!==key)delete C[oldKey];
+        C[key]={...d,key,r:+d.row_label?.replace(/\D/g,'')||1,b:d.bay||1,t:d.tier||1};
+        renderGrid();renderStats();
+        if(oldKey!==key)showSyncBadge('↔ '+d.cnum+' moved by teammate');
+        else showSyncBadge('✎ '+d.cnum+' updated by teammate');
+      })
+    .on('postgres_changes',{event:'DELETE',schema:'public',table:'containers',filter:'depot_id=eq.'+currentDepot.id},
+      payload=>{
+        const id=payload.old?.id;
+        const key=Object.keys(C).find(k=>C[k].id===id);
+        if(key){delete C[key];renderGrid();renderStats();renderLegend();showSyncBadge('✕ cont removed by teammate')}
+      })
+    .subscribe();
+}
+
+let syncBadgeTimer=null;
+function showSyncBadge(msg){
+  let badge=document.getElementById('sync-badge');
+  if(!badge){
+    badge=document.createElement('div');
+    badge.id='sync-badge';
+    badge.style.cssText='position:fixed;top:50px;right:20px;background:var(--blue);color:#fff;padding:6px 14px;border-radius:var(--radius);font-size:11px;z-index:9998;font-family:var(--mono);opacity:0;transition:opacity .3s;pointer-events:none';
+    document.body.appendChild(badge);
+  }
+  badge.textContent='🔄 '+msg;
+  badge.style.opacity='1';
+  clearTimeout(syncBadgeTimer);
+  syncBadgeTimer=setTimeout(()=>{badge.style.opacity='0'},3000);
 }
 function applyPermissions(){
   const r=currentProfile?.role||'technician';
@@ -743,12 +811,24 @@ async function addCont(){
   const date=document.getElementById('a-date').value||null;
   const remark=document.getElementById('a-remark').value.trim()||null;
   const slotStr=document.getElementById('a-slot').value.trim();
+
+  // SPRINT1 FIX: Check duplicate cnum in this depot
+  const{data:existing}=await sb.from('containers').select('id,slot_key').eq('depot_id',currentDepot.id).eq('cnum',cnum).maybeSingle();
+  if(existing){notif('Container '+cnum+' đã tồn tại tại '+existing.slot_key);return}
+
   let slot=slotStr?parseSk(slotStr):null;
   if(slot){
     if(slot.r<1||slot.r>ROWS||slot.b<1||slot.b>BAYS){notif('Row/Bay ngoài phạm vi');return}
+    if(slot.t<1||slot.t>TIERS){notif('Tier 1-5');return}
     if(slot.t>1&&!C[sk(slot.r,slot.b,slot.t-1)]){notif('Tầng bên dưới trống');return}
-    if(C[sk(slot.r,slot.b,slot.t)]){notif('Slot đã có cont');return}
-  }else slot=autoSlot();
+    // SPRINT1 FIX: Verify slot free in DB (not just local state)
+    const chkKey=sk(slot.r,slot.b,slot.t);
+    const{data:occ}=await sb.from('containers').select('id,cnum').eq('depot_id',currentDepot.id).eq('slot_key',chkKey).maybeSingle();
+    if(occ){notif('Slot '+chkKey+' đã có cont '+occ.cnum+' (DB conflict — thử reload)');return}
+  }else{
+    // SPRINT1 FIX: Find free slot verified against live DB
+    slot=await findFreeSlotDB();
+  }
   if(!slot){notif('Bãi đầy');return}
   const key=sk(slot.r,slot.b,slot.t);
   const{data,error}=await sb.from('containers').insert({
@@ -756,11 +836,32 @@ async function addCont(){
     row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key,
     created_by:currentUser.id,updated_by:currentUser.id
   }).select().single();
-  if(error){notif('Lỗi: '+error.message);return}
+  if(error){
+    if(error.code==='23505')notif('Container '+cnum+' đã tồn tại hoặc slot bị chiếm — vui lòng reload');
+    else notif('Lỗi: '+error.message);
+    return;
+  }
   C[key]={...data,key,r:slot.r,b:slot.b,t:slot.t};
   await dbLog('add','Thêm '+cnum,key+' | Grade '+grade,data.id,cnum);
   closeOv('ov-add');renderAll();notif('Thêm '+cnum+' → '+key);
 }
+
+// SPRINT1: Find free slot verified against live DB
+async function findFreeSlotDB(){
+  const{data:occupied}=await sb.from('containers').select('slot_key').eq('depot_id',currentDepot.id);
+  const occupiedSet=new Set((occupied||[]).map(c=>c.slot_key));
+  for(let r=1;r<=ROWS;r++){
+    for(let b=1;b<=BAYS;b++){
+      for(let t=1;t<=TIERS;t++){
+        if(t>1&&!occupiedSet.has(sk(r,b,t-1)))break;
+        const key=sk(r,b,t);
+        if(!occupiedSet.has(key))return{r,b,t};
+      }
+    }
+  }
+  return null;
+}
+
 function openAdd(){
   if(!perm('canAdd')){notif('Không có quyền');return}
   document.getElementById('a-cnum').value='';document.getElementById('a-slot').value='';
@@ -774,6 +875,8 @@ function openDetail(key){
   detailKey=key;pendingGrade=c.grade;
   document.getElementById('d-title').innerHTML=`<span class="grade g${c.grade}">${c.grade}</span>${c.cnum}`;
   document.getElementById('d-remark').value=c.remark||'';
+  document.getElementById('d-est-cost').value=c.est_cost||'';
+  document.getElementById('d-actual-cost').value=c.actual_cost||'';
   const days=daysSince(c.date_in);
   const agingTag=days>=20?`<span class="tt-aging aging-c">${days}d ⚠</span>`:days>=14?`<span class="tt-aging aging-w">${days}d</span>`:`<span style="font-size:11px;color:var(--text3);font-family:var(--mono)">${days}d</span>`;
   document.getElementById('d-body').innerHTML=
@@ -809,6 +912,12 @@ async function saveDetail(){
   const updates={updated_by:currentUser.id};
   if(perm('canGrade')&&pendingGrade&&pendingGrade!==oldG){updates.grade=pendingGrade;c.grade=pendingGrade;await dbLog('grade',`${c.cnum}: ${oldG}→${pendingGrade}`,detailKey,c.id,c.cnum)}
   if(perm('canEdit')&&newR!==c.remark){updates.remark=newR;c.remark=newR;await dbLog('remark',`${c.cnum}: remark update`,newR,c.id,c.cnum)}
+  const newEst=parseFloat(document.getElementById('d-est-cost').value)||0;
+  const newAct=parseFloat(document.getElementById('d-actual-cost').value)||0;
+  if(perm('canEdit')&&(newEst!==c.est_cost||newAct!==c.actual_cost)){
+    updates.est_cost=newEst||null;updates.actual_cost=newAct||null;
+    c.est_cost=newEst;c.actual_cost=newAct;
+  }
   if(Object.keys(updates).length>1){
     await sb.from('containers').update(updates).eq('id',c.id);
   }
@@ -997,7 +1106,33 @@ function renderPlan(){
   const el=document.getElementById('plan-list'),cnt=document.getElementById('move-cnt');
   cnt.textContent=moves.length?'('+moves.length+')':'';
   if(!moves.length){el.innerHTML='<div style="font-size:10px;color:var(--text3);font-family:var(--mono)">No planned moves</div>';return}
-  el.innerHTML=[...moves].reverse().map(m=>`<div class="plan-item"><span class="plan-cnum">${m.cnum}</span> → <span style="color:var(--blue)">${m.to}</span>${m.note?`<div style="color:var(--text3)">${m.note}</div>`:''}<div style="color:var(--text3)">${m.time}</div></div>`).join('');
+  el.innerHTML=[...moves].reverse().map((m,i)=>{
+    const isDone=m.confirmed;
+    const canConfirm=perm('canMove')&&!isDone;
+    return`<div class="plan-item" style="opacity:${isDone?'.5':'1'}">
+      <span class="plan-cnum">${m.cnum}</span> → <span style="color:var(--blue)">${m.to}</span>
+      <span style="margin-left:4px;font-size:9px;padding:1px 5px;border-radius:3px;background:${isDone?'var(--green-bg)':'var(--amber-bg)'};color:${isDone?'var(--green)':'var(--amber)'}">${isDone?'DONE':'PLANNED'}</span>
+      ${m.note?`<div style="color:var(--text3);font-size:9px">${m.note}</div>`:''}
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <span style="color:var(--text3);font-size:9px">${m.time}</span>
+        ${canConfirm?`<button onclick="confirmMoveExecution(${moves.length-1-i})" style="padding:1px 6px;font-size:9px;border-radius:3px;border:1px solid var(--green);background:transparent;color:var(--green);cursor:pointer;font-family:var(--mono)">✓ Done</button>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// SPRINT2B: Forklift confirms move executed
+async function confirmMoveExecution(idx){
+  const m=moves[idx];
+  if(!m||m.confirmed)return;
+  m.confirmed=true;
+  m.confirmedAt=ts();
+  m.confirmedBy=currentProfile?.full_name;
+  // Update move status in DB
+  await sb.from('moves').update({status:'done',done_at:new Date().toISOString()}).eq('depot_id',currentDepot.id).eq('to_slot',m.to).eq('cnum',m.cnum);
+  await dbLog('move','Move confirmed: '+m.cnum,m.from+'→'+m.to+' by '+currentProfile?.full_name);
+  renderPlan();
+  notif('✓ Move confirmed: '+m.cnum+' → '+m.to);
 }
 
 // ── STATS ──
@@ -1012,23 +1147,51 @@ function renderStats(){
 }
 
 // ── KPI ──
-function renderKPI(){
-  const all=Object.values(C);
+async function renderKPI(){
   const wrap=document.getElementById('kpi-wrap');
+  wrap.innerHTML='<div style="padding:20px;text-align:center;color:var(--text3);font-family:var(--mono)">Loading...</div>';
+  const all=Object.values(C);
   const total=all.length;
   const dmg=all.filter(c=>['C','D'].includes(c.grade)).length;
   const repair=all.filter(c=>c.grade==='E').length;
   const ready=all.filter(c=>['A','B'].includes(c.grade)).length;
   const aging14=all.filter(c=>daysSince(c.date_in)>=14).length;
   const aging20=all.filter(c=>daysSince(c.date_in)>=20).length;
-  // Grade breakdown by line
-  const byLine={};
-  LINES.forEach(l=>{byLine[l]=all.filter(c=>c.line===l).length});
+  const byLine={};LINES.forEach(l=>{byLine[l]=all.filter(c=>c.line===l).length});
   const maxLine=Math.max(...Object.values(byLine),1);
+
+  // SPRINT3A: Load history to build activity timeline
+  const{data:recentHist}=await sb.from('history')
+    .select('action_type,created_at,description')
+    .eq('depot_id',currentDepot.id)
+    .order('created_at',{ascending:false})
+    .limit(200);
+
+  // Build weekly activity from history
+  const weeklyActivity={};
+  (recentHist||[]).forEach(h=>{
+    const week=h.created_at?new Date(h.created_at).toLocaleDateString('vi-VN',{day:'2-digit',month:'2-digit'}):'?';
+    if(!weeklyActivity[week])weeklyActivity[week]={add:0,move:0,grade:0};
+    if(h.action_type==='add')weeklyActivity[week].add++;
+    else if(h.action_type==='move')weeklyActivity[week].move++;
+    else if(h.action_type==='grade')weeklyActivity[week].grade++;
+  });
+  const weeks=Object.keys(weeklyActivity).slice(-7).reverse();
+  const maxActivity=Math.max(...weeks.map(w=>weeklyActivity[w].add+weeklyActivity[w].move+weeklyActivity[w].grade),1);
+
+  // SPRINT3B: Cost tracking summary
+  const withCost=all.filter(c=>c.est_cost>0);
+  const totalCost=withCost.reduce((s,c)=>s+(c.est_cost||0),0);
+  const totalActual=withCost.reduce((s,c)=>s+(c.actual_cost||0),0);
+
   wrap.innerHTML=`
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
       <div style="font-size:12px;font-weight:700;color:var(--text2);font-family:var(--mono);text-transform:uppercase;letter-spacing:.8px">KPI Dashboard — ${currentDepot?.name||'Depot'}</div>
-      <div style="font-size:11px;color:var(--text3);font-family:var(--mono)">${new Date().toLocaleDateString('vi-VN')}</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span style="font-size:11px;color:var(--text3);font-family:var(--mono)">${new Date().toLocaleDateString('vi-VN')}</span>
+        <button class="btn" onclick="renderKPI()" style="font-size:10px;padding:3px 8px">↺ Refresh</button>
+        <button class="btn" onclick="printReport()" style="font-size:10px;padding:3px 8px;border-color:var(--green);color:var(--green)">🖨 In báo cáo</button>
+      </div>
     </div>
     <div class="kpi-grid">
       <div class="kpi-card"><div class="kpi-label">Total Containers</div><div class="kpi-value">${total}</div><div class="kpi-sub">Occupancy: ${Math.round(total/CAP*100)}% / ${CAP} TEU</div></div>
@@ -1036,7 +1199,7 @@ function renderKPI(){
       <div class="kpi-card" style="border-color:var(--cd-b)"><div class="kpi-label">Damaged (C+D)</div><div class="kpi-value" style="color:var(--red)">${dmg}</div><div class="kpi-sub">${Math.round(dmg/Math.max(total,1)*100)}% of total</div></div>
       <div class="kpi-card" style="border-color:var(--ce-b)"><div class="kpi-label">In Repair (E)</div><div class="kpi-value" style="color:var(--purple)">${repair}</div><div class="kpi-sub">Đang sửa chữa</div></div>
       <div class="kpi-card" style="border-color:#4A3510"><div class="kpi-label">Aging ≥14 ngày</div><div class="kpi-value" style="color:var(--amber)">${aging14}</div><div class="kpi-sub">Đỏ (≥20d): ${aging20}</div></div>
-      <div class="kpi-card"><div class="kpi-label">Planned Moves</div><div class="kpi-value">${moves.length}</div><div class="kpi-sub">Session hiện tại</div></div>
+      <div class="kpi-card"><div class="kpi-label">Planned Moves</div><div class="kpi-value">${moves.length}</div><div class="kpi-sub">Confirmed: ${moves.filter(m=>m.confirmed).length}</div></div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
       <div class="chart-bar-wrap">
@@ -1045,7 +1208,7 @@ function renderKPI(){
           ${GRADES.filter(g=>g!=='OUT').map(g=>{
             const cnt=all.filter(c=>c.grade===g).length;
             const h=Math.max(4,Math.round(cnt/Math.max(total,1)*96));
-            return `<div class="bar-col"><div class="bar-val">${cnt}</div><div class="bar" style="height:${h}px;background:${GRADE_CLR[g]}"></div><div class="bar-lbl">${g}</div></div>`;
+            return`<div class="bar-col"><div class="bar-val">${cnt}</div><div class="bar" style="height:${h}px;background:${GRADE_CLR[g]}"></div><div class="bar-lbl">${g}</div></div>`;
           }).join('')}
         </div>
       </div>
@@ -1053,12 +1216,35 @@ function renderKPI(){
         <div class="chart-title">Containers by Line</div>
         <div class="bar-chart">
           ${LINES.filter(l=>byLine[l]>0).map(l=>{
-            const cnt=byLine[l];
-            const h=Math.max(4,Math.round(cnt/maxLine*96));
-            return `<div class="bar-col"><div class="bar-val">${cnt}</div><div class="bar" style="height:${h}px;background:${LCLR[l]}"></div><div class="bar-lbl" style="font-size:8px">${l.split(' ')[0]}</div></div>`;
+            const cnt=byLine[l];const h=Math.max(4,Math.round(cnt/maxLine*96));
+            return`<div class="bar-col"><div class="bar-val">${cnt}</div><div class="bar" style="height:${h}px;background:${LCLR[l]}"></div><div class="bar-lbl" style="font-size:8px">${l.split(' ')[0]}</div></div>`;
           }).join('')}
         </div>
       </div>
+    </div>
+    <div class="chart-bar-wrap" style="margin-top:12px">
+      <div class="chart-title">Activity Timeline (last 7 days)</div>
+      ${weeks.length?`<div class="bar-chart" style="height:80px;align-items:flex-end">
+        ${weeks.map(w=>{
+          const d=weeklyActivity[w];
+          const total_act=d.add+d.move+d.grade;
+          const h=Math.max(4,Math.round(total_act/maxActivity*76));
+          return`<div class="bar-col">
+            <div class="bar-val">${total_act}</div>
+            <div style="display:flex;flex-direction:column;justify-content:flex-end;height:76px;gap:1px">
+              <div style="height:${Math.round(d.add/maxActivity*76)}px;background:var(--green);border-radius:2px 2px 0 0;min-height:${d.add?2:0}px"></div>
+              <div style="height:${Math.round(d.move/maxActivity*76)}px;background:var(--blue);min-height:${d.move?2:0}px"></div>
+              <div style="height:${Math.round(d.grade/maxActivity*76)}px;background:var(--amber);min-height:${d.grade?2:0}px"></div>
+            </div>
+            <div class="bar-lbl">${w}</div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div style="display:flex;gap:10px;margin-top:6px;font-size:10px;font-family:var(--mono)">
+        <span style="color:var(--green)">■ Add</span>
+        <span style="color:var(--blue)">■ Move</span>
+        <span style="color:var(--amber)">■ Grade</span>
+      </div>`:'<div style="color:var(--text3);font-size:11px;font-family:var(--mono);padding:8px 0">No activity data yet</div>'}
     </div>
     <div class="chart-bar-wrap" style="margin-top:12px">
       <div class="chart-title">Grade Distribution by Line</div>
@@ -1072,7 +1258,7 @@ function renderKPI(){
           ${LINES.filter(l=>byLine[l]>0).map(l=>`
             <tr style="border-bottom:1px solid var(--border)">
               <td style="padding:5px 8px;color:${LCLR[l]};font-weight:700">${l}</td>
-              ${GRADES.map(g=>{const n=all.filter(c=>c.line===l&&c.grade===g).length;return`<td style="padding:5px 8px;text-align:center;color:${n?GRADE_CLR[g]:' var(--text3)'}">${n||'—'}</td>`}).join('')}
+              ${GRADES.map(g=>{const n=all.filter(c=>c.line===l&&c.grade===g).length;return`<td style="padding:5px 8px;text-align:center;color:${n?GRADE_CLR[g]:'var(--text3)'}">${n||'—'}</td>`}).join('')}
               <td style="padding:5px 8px;text-align:center;font-weight:700">${byLine[l]}</td>
             </tr>`).join('')}
         </table>
@@ -1234,11 +1420,19 @@ async function parseRows(rows){
   const hdr=rows[0].map(h=>String(h||'').toLowerCase().trim());
   const fi=kws=>hdr.findIndex(h=>kws.some(k=>h.includes(k)));
   const idx={cnum:fi(['container','cnum','soá','số','cont']),line:fi(['line','shipping','carrier','hang']),size:fi(['size','teu','type']),grade:fi(['grade','cond','status','st','tinh']),date:fi(['date','ngay','ngày']),slot:fi(['slot','position','bay','vi tri','bay/row']),remark:fi(['remark','note','ghi','comment'])};
-  let added=0,skipped=0;const inserts=[];
+  // FIX 2A: Load existing cnums from DB to check duplicates
+  const{data:existingConts}=await sb.from('containers').select('cnum,slot_key').eq('depot_id',currentDepot.id);
+  const existingCnums=new Set((existingConts||[]).map(c=>c.cnum));
+  // FIX 2B: Load occupied slots from DB
+  const occupiedSlots=new Set((existingConts||[]).map(c=>c.slot_key));
+
+  let added=0,skipped=0,duplicates=0;const inserts=[];
   for(let i=1;i<rows.length;i++){
     const row=rows[i];if(!row||row.every(c=>!c))continue;
     const cnum=(idx.cnum>=0?String(row[idx.cnum]||''):'').trim().toUpperCase().replace(/\s/g,'');
     if(!cnum||cnum.length<4)continue;
+    // FIX 2C: Skip duplicates
+    if(existingCnums.has(cnum)){duplicates++;continue}
     const line=matchLine(idx.line>=0?String(row[idx.line]||''):'');
     const sr=(idx.size>=0?String(row[idx.size]||'40'):'40').replace(/[^0-9]/g,'');
     const size=sr==='20'?'20':'40';
@@ -1246,21 +1440,40 @@ async function parseRows(rows){
     const dateRaw=(idx.date>=0?String(row[idx.date]||''):'').trim();
     const date=dateRaw?new Date(dateRaw.replace(/\//g,'-')).toISOString().slice(0,10):null;
     const remark=(idx.remark>=0?String(row[idx.remark]||''):'').trim()||null;
-    let slot=autoSlot();
+    // FIX 2D: Find free slot using DB-verified occupied set
+    let slot=null;
+    outer:for(let r=1;r<=ROWS;r++){
+      for(let b=1;b<=BAYS;b++){
+        for(let t=1;t<=TIERS;t++){
+          const k=sk(r,b,t);
+          if(t>1&&!occupiedSlots.has(sk(r,b,t-1)))break;
+          if(!occupiedSlots.has(k)){slot={r,b,t};occupiedSlots.add(k);break outer}
+        }
+      }
+    }
     if(!slot){skipped++;continue}
     const key=sk(slot.r,slot.b,slot.t);
+    existingCnums.add(cnum);
     C[key]={cnum,line,size,grade,date_in:date,remark,r:slot.r,b:slot.b,t:slot.t,key,id:null};
     inserts.push({depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key,created_by:currentUser.id,updated_by:currentUser.id});
     added++;
   }
   if(inserts.length){
-    const{data,error}=await sb.from('containers').insert(inserts).select();
-    if(error){notif('DB error: '+error.message);return}
-    // Update IDs
-    (data||[]).forEach(d=>{if(C[d.slot_key])C[d.slot_key].id=d.id});
-    await dbLog('add',`Import ${added} containers`,'File import');
+    // FIX 2E: Insert in batches of 100 to avoid timeout
+    for(let i=0;i<inserts.length;i+=100){
+      const batch=inserts.slice(i,i+100);
+      const{data:bData,error}=await sb.from('containers').insert(batch).select();
+      if(error){
+        if(error.code==='23505'){notif('Một số cont đã tồn tại, bỏ qua');continue}
+        else{notif('DB error: '+error.message);return}
+      }
+      (bData||[]).forEach(d=>{if(C[d.slot_key])C[d.slot_key].id=d.id});
+    }
+    await dbLog('add',`Import ${added} containers`,`Duplicates skipped: ${duplicates}`);
   }
-  renderAll();notif(`Import: ${added}${skipped?' (skip '+skipped+')':''}`);
+  renderAll();
+  const msg=`Import: ${added} containers${duplicates?' | '+duplicates+' duplicate bỏ qua':''}${skipped?' | '+skipped+' lỗi':''}`;
+  notif(msg);
 }
 
 // ── EXPORT ──
@@ -1274,6 +1487,75 @@ function doExport(){
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([bom+csv],{type:'text/csv;charset=utf-8'}));
   a.download='giannam_yard_'+new Date().toISOString().slice(0,10)+'.csv';a.click();URL.revokeObjectURL(a.href);
   notif('Exported');
+}
+
+
+// SPRINT3B: Print Report
+function printReport(){
+  const all=Object.values(C);
+  if(!all.length){notif('Không có data để in');return}
+  const filter_grade=filter!=='all'&&filter!=='empty'?filter:null;
+  const data=filter_grade?all.filter(c=>c.grade===filter_grade):all;
+  data.sort((a,b)=>{
+    const go=['A','B','C','D','E','OUT'];
+    return go.indexOf(a.grade)-go.indexOf(b.grade)||a.key.localeCompare(b.key);
+  });
+  const now=new Date().toLocaleDateString('vi-VN',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  const gradeCount={};
+  GRADES.forEach(g=>{gradeCount[g]=data.filter(c=>c.grade===g).length});
+  const printWin=window.open('','_blank');
+  printWin.document.write(`<!DOCTYPE html><html><head>
+  <meta charset="UTF-8">
+  <title>Báo cáo bãi — ${currentDepot?.name}</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Arial,sans-serif;font-size:11px;color:#111;padding:16px}
+    h1{font-size:15px;font-weight:700;margin-bottom:2px}
+    .sub{font-size:10px;color:#666;margin-bottom:10px}
+    .summary{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+    .sum-card{padding:5px 10px;border-radius:4px;font-size:10px;font-weight:700;border:1px solid #ddd}
+    table{width:100%;border-collapse:collapse;font-size:10px}
+    th{background:#1a1a18;color:#fff;padding:5px 6px;text-align:left;font-weight:600}
+    td{padding:4px 6px;border-bottom:1px solid #eee}
+    tr:nth-child(even){background:#f9f9f9}
+    .gA{background:#E1F5EE;color:#0F6E56;padding:1px 5px;border-radius:3px;font-weight:700}
+    .gB{background:#E6F1FB;color:#185FA5;padding:1px 5px;border-radius:3px;font-weight:700}
+    .gC{background:#FAEEDA;color:#BA7517;padding:1px 5px;border-radius:3px;font-weight:700}
+    .gD{background:#FCEBEB;color:#A32D2D;padding:1px 5px;border-radius:3px;font-weight:700}
+    .gE{background:#F0EBFF;color:#6B3FA0;padding:1px 5px;border-radius:3px;font-weight:700}
+    .gOUT{background:#F1EFE8;color:#5F5E5A;padding:1px 5px;border-radius:3px;font-weight:700}
+    .aging-w{color:#BA7517;font-weight:700}
+    .aging-c{color:#A32D2D;font-weight:700}
+    @media print{@page{margin:10mm}button{display:none}}
+  </style></head><body>
+  <button onclick="window.print()" style="margin-bottom:12px;padding:6px 14px;background:#1a1a18;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px">🖨 In ngay</button>
+  <h1>BÁO CÁO BÃI CONTAINER — ${currentDepot?.name||'Depot'}</h1>
+  <div class="sub">Xuất lúc: ${now} | Người xuất: ${currentProfile?.full_name||'—'} | Tổng: ${data.length} containers${filter_grade?' | Filter: Grade '+filter_grade:''}</div>
+  <div class="summary">
+    ${GRADES.filter(g=>gradeCount[g]>0).map(g=>`<div class="sum-card g${g}">${g}: ${gradeCount[g]}</div>`).join('')}
+  </div>
+  <table>
+    <thead><tr><th>#</th><th>Container No.</th><th>Line</th><th>Size</th><th>Grade</th><th>Slot</th><th>Date In</th><th>Days</th><th>Remark</th></tr></thead>
+    <tbody>
+      ${data.map((c,i)=>{
+        const days=daysSince(c.date_in);
+        const agingCls=days>=20?'aging-c':days>=14?'aging-w':'';
+        return`<tr>
+          <td>${i+1}</td>
+          <td style="font-weight:600;font-family:monospace">${c.cnum}</td>
+          <td>${c.line}</td>
+          <td>${c.size}'</td>
+          <td><span class="g${c.grade}">${c.grade}</span></td>
+          <td style="font-family:monospace">${c.key}</td>
+          <td>${c.date_in||'—'}</td>
+          <td class="${agingCls}">${days||'—'}</td>
+          <td style="max-width:200px;color:#666">${c.remark||''}</td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table>
+  </body></html>`);
+  printWin.document.close();
 }
 
 // ── DEMO ──
@@ -1303,6 +1585,65 @@ async function loadDemo(){
 
 function renderAll(){renderTierTabs();renderGrid();renderLegend();renderStats()}
 function closeOv(id){document.getElementById(id).style.display='none'}
+
+// FIX 4A: Full database backup
+async function backupAllData(){
+  if(!perm('canAdmin')){notif('Không có quyền');return}
+  notif('Đang tải dữ liệu backup...');
+  try{
+    const[{data:conts},{data:mvs},{data:hist},{data:deps},{data:profs}]=await Promise.all([
+      sb.from('containers').select('*').eq('depot_id',currentDepot.id),
+      sb.from('moves').select('*').eq('depot_id',currentDepot.id),
+      sb.from('history').select('*').eq('depot_id',currentDepot.id),
+      sb.from('depots').select('*'),
+      sb.from('profiles').select('id,full_name,role,depot_id,active,created_at')
+    ]);
+    const backup={
+      version:'1.0',
+      exported_at:new Date().toISOString(),
+      exported_by:currentProfile?.full_name,
+      depot:currentDepot?.name,
+      data:{containers:conts||[],moves:mvs||[],history:hist||[],depots:deps||[],profiles:profs||[]}
+    };
+    const blob=new Blob([JSON.stringify(backup,null,2)],{type:'application/json'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='giannam_backup_'+new Date().toISOString().slice(0,10)+'.json';
+    a.click();URL.revokeObjectURL(a.href);
+    notif('Backup xong: '+((conts||[]).length)+' containers, '+((hist||[]).length)+' history records');
+  }catch(e){notif('Backup lỗi: '+e.message)}
+}
+
+// FIX 4B: DB Stats
+async function showDbStats(){
+  if(!perm('canAdmin')){notif('Không có quyền');return}
+  try{
+    const[{count:cCnt},{count:hCnt},{count:mCnt}]=await Promise.all([
+      sb.from('containers').select('*',{count:'exact',head:true}).eq('depot_id',currentDepot.id),
+      sb.from('history').select('*',{count:'exact',head:true}).eq('depot_id',currentDepot.id),
+      sb.from('moves').select('*',{count:'exact',head:true}).eq('depot_id',currentDepot.id),
+    ]);
+    const lastPing=localStorage.getItem('gn_last_ping');
+    const pingAge=lastPing?Math.round((Date.now()-parseInt(lastPing))/(1000*60*60))+' giờ trước':'Chưa ping';
+    alert(
+      'DB STATS — '+currentDepot?.name+'
+'+
+      '─────────────────────
+'+
+      'Containers: '+cCnt+'
+'+
+      'Move records: '+mCnt+'
+'+
+      'History log: '+hCnt+'
+'+
+      '─────────────────────
+'+
+      'Keep-alive last ping: '+pingAge+'
+'+
+      'Supabase project: istgokltpnnsxctoetvn'
+    );
+  }catch(e){notif('Stats lỗi: '+e.message)}
+}
 let _nt;
 function notif(msg){const el=document.getElementById('notif');el.textContent=msg;el.classList.add('show');clearTimeout(_nt);_nt=setTimeout(()=>el.classList.remove('show'),3200)}
 
@@ -1363,6 +1704,7 @@ async function switchDepot(depotId){
   await loadContainers();
   await loadHistory();
   renderAll();renderPlan();
+  setupRealtime(); // SPRINT2: Re-subscribe to new depot's channel
   notif('Switched: '+currentDepot.name);
 }
 
@@ -1374,6 +1716,29 @@ document.addEventListener('click',e=>{
 
 // ── INIT ──
 sb.auth.getSession().then(({data:{session}})=>{if(session)initApp(session.user)});
+
+// FIX 3: Keep Supabase alive - ping every 4 days to prevent auto-pause
+// Stores last ping time in localStorage
+(function keepAlive(){
+  const KEY='gn_last_ping';
+  const INTERVAL=4*24*60*60*1000; // 4 days
+  const last=parseInt(localStorage.getItem(KEY)||'0');
+  const now=Date.now();
+  if(now-last>INTERVAL){
+    sb.from('depots').select('id').limit(1).then(()=>{
+      localStorage.setItem(KEY,String(now));
+      console.log('Supabase keep-alive ping sent');
+    });
+  }
+  // Re-check every 24 hours while app is open
+  setInterval(async()=>{
+    const l=parseInt(localStorage.getItem(KEY)||'0');
+    if(Date.now()-l>INTERVAL){
+      await sb.from('depots').select('id').limit(1);
+      localStorage.setItem(KEY,String(Date.now()));
+    }
+  },24*60*60*1000);
+})();
 </script>
 </body>
 </html>
