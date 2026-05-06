@@ -284,16 +284,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
   <!-- TOPBAR -->
   <div class="topbar">
     <span class="brand">GN·M&R</span>
-    <div id="depot-switcher" style="position:relative">
-      <button id="depot-name" onclick="toggleDepotMenu()" style="background:transparent;border:1px solid var(--border2);border-radius:var(--radius);padding:3px 10px;font-size:11px;color:var(--text2);cursor:pointer;font-family:var(--mono);display:flex;align-items:center;gap:5px;white-space:nowrap">
-        <span id="depot-name-text">Depot 3</span>
-        <svg id="depot-arrow" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display:none;flex-shrink:0"><polyline points="6 9 12 15 18 9"/></svg>
-      </button>
-      <div id="depot-menu" style="display:none;position:fixed;background:var(--surface);border:1px solid var(--border2);border-radius:var(--radius-lg);box-shadow:0 4px 24px rgba(0,0,0,.7);min-width:240px;z-index:99999;overflow:hidden">
-        <div style="padding:6px 10px;font-size:9px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;letter-spacing:.6px;border-bottom:1px solid var(--border)">Chọn Depot</div>
-        <div id="depot-menu-items"></div>
-      </div>
-    </div>
+    <span class="brand-sub" id="depot-name">Depot 3</span>
     <div class="mode-badge" id="mode-badge"></div>
     <button class="nav-btn on" id="nav-yard" onclick="showView('yard')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>Bãi
@@ -456,7 +447,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Thêm Depot
           </button>
           <table class="user-table" id="depot-table">
-            <thead><tr><th>Tên Depot</th><th>Code</th><th>Rows</th><th>Bays</th><th>Tiers</th><th>Thao tác</th></tr></thead>
+            <thead><tr><th>Tên Depot</th><th>Code</th><th>Rows</th><th>Bays</th><th>Tiers</th></tr></thead>
             <tbody id="depot-tbody"><tr><td colspan="5" style="text-align:center;color:var(--text3);padding:20px;font-family:var(--mono)">Loading...</td></tr></tbody>
           </table>
         </div>
@@ -644,11 +635,11 @@ async function initApp(user){
   // Setup UI
   document.getElementById('user-name').textContent=prof?.full_name||user.email;
   document.getElementById('user-role').textContent=prof?.role||'user';
+  document.getElementById('depot-name').textContent=currentDepot?.name||'Depot';
   if(prof?.role==='admin'||prof?.role==='manager'){
     document.getElementById('nav-admin').style.display='';
   }
   applyPermissions();
-  buildDepotSwitcher();
   // Hide login, show app
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').classList.add('visible');
@@ -1135,12 +1126,7 @@ async function loadAdminData(){
   </tr>`).join('');
   const{data:deps}=await sb.from('depots').select('*');
   const dtbody=document.getElementById('depot-tbody');
-  dtbody.innerHTML=(deps||[]).map(d=>`<tr>
-    <td style="font-weight:600">${d.name}</td>
-    <td style="font-family:var(--mono)">${d.code}</td>
-    <td>${d.rows}</td><td>${d.bays}</td><td>${d.tiers}</td>
-    <td><button class="btn danger" style="padding:3px 8px;font-size:10px" onclick="deleteDepot('${d.id}','${d.name}','${d.code}')">Xóa</button></td>
-  </tr>`).join('');
+  dtbody.innerHTML=(deps||[]).map(d=>`<tr><td style="font-weight:600">${d.name}</td><td style="font-family:var(--mono)">${d.code}</td><td>${d.rows}</td><td>${d.bays}</td><td>${d.tiers}</td></tr>`).join('');
 }
 async function toggleUser(id,active){
   await sb.from('profiles').update({active:!active}).eq('id',id);
@@ -1179,32 +1165,6 @@ async function createDepot(){
   closeOv('ov-create-depot');loadAdminData();notif('Tạo depot: '+name);
 }
 function openCreateDepot(){document.getElementById('ov-create-depot').style.display='flex'}
-async function deleteDepot(id,name,code){
-  if(code==='DEPOT3'){notif('Không thể xóa depot mặc định');return}
-  if(!confirm('Xóa depot "'+name+'"? Toàn bộ container trong depot này sẽ bị xóa.'))return;
-  // Delete containers first
-  await sb.from('containers').delete().eq('depot_id',id);
-  await sb.from('moves').delete().eq('depot_id',id);
-  await sb.from('history').delete().eq('depot_id',id);
-  const{error}=await sb.from('depots').delete().eq('id',id);
-  if(error){notif('Lỗi: '+error.message);return}
-  // Reload depots list
-  const{data:deps}=await sb.from('depots').select('*').order('created_at');
-  depots=deps||[];
-  // If deleted current depot, switch to first available
-  if(currentDepot?.id===id){
-    currentDepot=depots[0];
-    if(currentDepot){
-      ROWS=currentDepot.rows;BAYS=currentDepot.bays;TIERS=currentDepot.tiers;CAP=ROWS*BAYS*TIERS;
-      C={};moves=[];
-      await loadContainers();
-      renderAll();renderPlan();
-    }
-  }
-  buildDepotSwitcher();
-  loadAdminData();
-  notif('Đã xóa depot: '+name);
-}
 
 // ── IMPORT ──
 function matchLine(raw){const r=(raw||'').toUpperCase();if(r.includes('CMA'))return'CMA CGM';if(r.includes('MSC'))return'MSC';if(r.includes('HAPAG')||r.includes('LLOYD'))return'Hapag-Lloyd';if(r.includes('ZIM'))return'ZIM';if(r.includes('COSCO'))return'COSCO';return'Other'}
@@ -1291,71 +1251,6 @@ function renderAll(){renderTierTabs();renderGrid();renderLegend();renderStats()}
 function closeOv(id){document.getElementById(id).style.display='none'}
 let _nt;
 function notif(msg){const el=document.getElementById('notif');el.textContent=msg;el.classList.add('show');clearTimeout(_nt);_nt=setTimeout(()=>el.classList.remove('show'),3200)}
-
-
-// ── DEPOT SWITCHER ──
-function buildDepotSwitcher(){
-  const canSwitch=['admin','manager'].includes(currentProfile?.role);
-  const arrow=document.getElementById('depot-arrow');
-  const btn=document.getElementById('depot-name');
-  document.getElementById('depot-name-text').textContent=currentDepot?.name||'Depot';
-  if(canSwitch){
-    arrow.style.display='flex';
-    btn.style.borderColor='var(--border2)';
-    btn.style.cursor='pointer';
-  }else{
-    arrow.style.display='none';
-    btn.style.borderColor='transparent';
-    btn.style.cursor='default';
-  }
-  // Build menu items
-  const el=document.getElementById('depot-menu-items');
-  el.innerHTML=depots.map(d=>`
-    <div onclick="switchDepot('${d.id}')" style="padding:8px 12px;font-size:12px;cursor:pointer;font-family:var(--mono);display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);transition:background .1s" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background='transparent'">
-      <span style="color:${d.id===currentDepot?.id?'var(--green)':'var(--text)'};font-weight:${d.id===currentDepot?.id?700:400}">${d.name}</span>
-      ${d.id===currentDepot?.id?'<span style="color:var(--green);font-size:10px">●</span>':''}
-    </div>`).join('');
-}
-
-function toggleDepotMenu(){
-  if(!['admin','manager'].includes(currentProfile?.role))return;
-  const menu=document.getElementById('depot-menu');
-  if(menu.style.display==='none'){
-    const btn=document.getElementById('depot-name');
-    const rect=btn.getBoundingClientRect();
-    menu.style.top=(rect.bottom+4)+'px';
-    menu.style.left=rect.left+'px';
-    menu.style.display='block';
-  }else{
-    menu.style.display='none';
-  }
-}
-
-async function switchDepot(depotId){
-  if(depotId===currentDepot?.id){document.getElementById('depot-menu').style.display='none';return}
-  currentDepot=depots.find(d=>d.id===depotId);
-  if(!currentDepot)return;
-  ROWS=currentDepot.rows;BAYS=currentDepot.bays;TIERS=currentDepot.tiers;CAP=ROWS*BAYS*TIERS;
-  document.getElementById('depot-name-text').textContent=currentDepot.name;
-  document.getElementById('depot-menu').style.display='none';
-  // Reset state
-  C={};moves=[];tier=1;filter='all';searchMatches=[];
-  document.getElementById('search-input').value='';
-  document.getElementById('sh').style.display='block';
-  document.getElementById('sr').style.display='none';
-  setFilter('all');setMode('view');
-  buildDepotSwitcher();
-  await loadContainers();
-  await loadHistory();
-  renderAll();renderPlan();
-  notif('Switched: '+currentDepot.name);
-}
-
-// Close depot menu when clicking outside
-document.addEventListener('click',e=>{
-  const sw=document.getElementById('depot-switcher');
-  if(sw&&!sw.contains(e.target))document.getElementById('depot-menu').style.display='none';
-});
 
 // ── INIT ──
 sb.auth.getSession().then(({data:{session}})=>{if(session)initApp(session.user)});
