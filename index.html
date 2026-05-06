@@ -325,9 +325,12 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
     <button class="btn" onclick="openAdd()" id="btn-add" style="font-size:11px;padding:4px 10px">
       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add
     </button>
-    <button class="btn" onclick="doExport()" style="font-size:11px;padding:4px 10px">
-      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>Export
-    </button>
+    <div style="display:inline-flex;border:1px solid var(--border2);border-radius:var(--radius);overflow:hidden">
+      <button class="btn" onclick="doExport(false)" style="font-size:11px;padding:4px 10px;border:none;border-radius:0">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>Export
+      </button>
+      <button class="btn" onclick="doExport(true)" style="font-size:11px;padding:4px 8px;border:none;border-left:1px solid var(--border2);border-radius:0" title="+OUT">+OUT</button>
+    </div>
     <div class="user-chip">
       <span id="user-name">—</span>
       <span class="user-role" id="user-role">—</span>
@@ -947,8 +950,18 @@ async function confirmMove(){
   if(!to||to.r<1||to.r>ROWS||to.b<1||to.b>BAYS){notif('Slot không hợp lệ');return}
   if(!to.t){const nxt=nextFree(to.r,to.b);if(!nxt){notif('Cột đầy');return}to.t=nxt}
   const tkey=sk(to.r,to.b,to.t);
+  if(!moveFrom||!C[moveFrom]){notif('Mất nguồn — vui lòng reload');return}
+  // Verify source slot still has this container in DB (race condition check)
+  const srcCnum=C[moveFrom].cnum;
+  const{data:srcCheck}=await sb.from('containers').select('id,slot_key,cnum').eq('depot_id',currentDepot.id).eq('slot_key',moveFrom).maybeSingle();
+  if(!srcCheck||srcCheck.cnum!==srcCnum){
+    notif('Cont đã bị di chuyển bởi người khác — vui lòng reload bãi');
+    await loadContainers();renderAll();return;
+  }
+  // Verify target slot is still free in DB
+  const{data:tgtCheck}=await sb.from('containers').select('id').eq('depot_id',currentDepot.id).eq('slot_key',tkey).maybeSingle();
+  if(tgtCheck){notif('Slot đích đã bị chiếm — vui lòng chọn slot khác');return}
   if(C[tkey]){notif('Slot đích đã có cont');return}
-  if(!moveFrom||!C[moveFrom]){notif('Mất nguồn');return}
   const src=C[moveFrom];
   // DB
   await sb.from('containers').update({row_label:'R'+String(to.r).padStart(2,'0'),bay:to.b,tier:to.t,slot_key:tkey,updated_by:currentUser.id}).eq('id',src.id);
@@ -1303,8 +1316,8 @@ async function showView(v){
   });
   document.getElementById('searchbar').style.display=v==='yard'?'':'none';
   document.getElementById('statbar').style.display=v==='yard'?'':'none';
-  if(v==='kpi')renderKPI();
-  if(v==='history'){loadHistory().then(()=>renderHistView())}
+  if(v==='kpi')await renderKPI();
+  if(v==='history'){await loadHistory();renderHistView();}
   if(v==='admin')await loadAdminData();
 }
 async function loadAdminData(){
@@ -1321,7 +1334,8 @@ async function loadAdminData(){
     <td><button class="btn danger" style="padding:3px 8px;font-size:10px" onclick="toggleUser('${u.id}',${u.active})">${u.active?'Deactivate':'Activate'}</button></td>
   </tr>`).join('');
   const{data:deps}=await sb.from('depots').select('*').order('created_at');
-  depots=deps||[];
+  depots=deps||[];  // Refresh global depots array
+  buildDepotSwitcher();  // Sync depot switcher dropdown
   await renderAdminDepotTable(deps);
 }
 async function toggleUser(id,active){
@@ -1338,12 +1352,18 @@ async function createUser(){
   if(!name||!email||!pass){notif('Điền đầy đủ thông tin');return}
   // Create auth user via admin API (need service key - use edge function in production)
   // For now, direct signup
-  const{data,error}=await sb.auth.signUp({email,password:pass,options:{data:{full_name:name}}});
+  const{data,error}=await sb.auth.signUp({email,password:pass,options:{data:{full_name:name},emailRedirectTo:window.location.href}});
   if(error){notif('Lỗi: '+error.message);return}
   if(data.user){
     await sb.from('profiles').insert({id:data.user.id,full_name:name,role,depot_id:depot_id||depots[0]?.id});
+    closeOv('ov-create-user');
+    await loadAdminData();
+    if(data.user.email_confirmed_at){
+      notif('Tạo tài khoản thành công: '+email);
+    }else{
+      notif('Tạo xong. Yêu cầu '+email+' xác nhận email trước khi đăng nhập (hoặc tắt email confirm trong Supabase Auth settings)');
+    }
   }
-  closeOv('ov-create-user');loadAdminData();notif('Tạo tài khoản: '+email);
 }
 function openCreateUser(){
   if(!perm('canAdmin')){notif('Không có quyền');return}
@@ -1477,9 +1497,10 @@ async function parseRows(rows){
 }
 
 // ── EXPORT ──
-function doExport(){
+function doExport(includeOut=false){
   const rows=[['Container No','Line','Size','Grade','Grade Label','Date In','Slot','Row','Bay','Tier','Days In Yard','Remark']];
-  Object.values(C).sort((a,b)=>a.key.localeCompare(b.key)).forEach(c=>{
+  const exportData=includeOut?Object.values(C):Object.values(C).filter(c=>c.grade!=='OUT');
+  exportData.sort((a,b)=>a.key.localeCompare(b.key)).forEach(c=>{
     rows.push([c.cnum,c.line,c.size+"'",c.grade,GRADE_LABEL[c.grade],c.date_in,c.key,c.r,c.b,c.t,daysSince(c.date_in),c.remark||'']);
   });
   const bom='\uFEFF';
@@ -1625,23 +1646,12 @@ async function showDbStats(){
     ]);
     const lastPing=localStorage.getItem('gn_last_ping');
     const pingAge=lastPing?Math.round((Date.now()-parseInt(lastPing))/(1000*60*60))+' giờ trước':'Chưa ping';
-    alert(
-      'DB STATS — '+currentDepot?.name+'
-'+
-      '─────────────────────
-'+
-      'Containers: '+cCnt+'
-'+
-      'Move records: '+mCnt+'
-'+
-      'History log: '+hCnt+'
-'+
-      '─────────────────────
-'+
-      'Keep-alive last ping: '+pingAge+'
-'+
-      'Supabase project: istgokltpnnsxctoetvn'
-    );
+    alert(`DB STATS — ${currentDepot?.name}
+Containers: ${cCnt}
+Move records: ${mCnt}
+History log: ${hCnt}
+Keep-alive last ping: ${pingAge}
+Supabase project: istgokltpnnsxctoetvn`);
   }catch(e){notif('Stats lỗi: '+e.message)}
 }
 let _nt;
