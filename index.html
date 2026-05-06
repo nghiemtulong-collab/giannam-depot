@@ -1390,9 +1390,10 @@ async function deleteDepot(id,name,code){
   if(!confirm('Xóa depot "'+name+'"? Toàn bộ container trong depot này sẽ bị xóa.'))return;
   notif('Đang xóa...');
   try{
-    await sb.from('containers').delete().eq('depot_id',id);
+    // Null out FK references first to avoid FK constraint violations
+    await sb.from('history').update({depot_id:null,container_id:null}).eq('depot_id',id);
     await sb.from('moves').delete().eq('depot_id',id);
-    await sb.from('history').delete().eq('depot_id',id);
+    await sb.from('containers').delete().eq('depot_id',id);
     const{error}=await sb.from('depots').delete().eq('id',id);
     if(error){notif('Lỗi xóa depot: '+error.message);return}
     // Force reload depots from DB
