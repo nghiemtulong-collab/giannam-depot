@@ -892,7 +892,7 @@ async function addCont(){
   const{data,error}=await sb.from('containers').insert({
     depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,
     row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key,
-    created_by:currentUser.id,updated_by:currentUser.id
+    created_by:currentUser.id
   }).select().single();
   if(error){
     if(error.code==='23505')notif('Container '+cnum+' đã tồn tại hoặc slot bị chiếm — vui lòng reload');
@@ -1631,7 +1631,7 @@ async function parseLegacyFormat(rows,headerRow){
       date_in:date,remark:fullRemark||null,
       row_label:'R'+String(slot.r).padStart(2,'0'),
       bay:slot.b,tier:slot.t,slot_key:key,
-      created_by:currentUser.id,updated_by:currentUser.id
+      created_by:currentUser.id
     });
     added++;
   }
@@ -1700,7 +1700,7 @@ async function parseStandardFormat(rows,headerRow){
     if(!slot){skipped++;continue}
     const key=sk(slot.r,slot.b,slot.t);
     occupiedSlots.add(key);existingConts.add(cnum);
-    inserts.push({depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key,created_by:currentUser.id,updated_by:currentUser.id});
+    inserts.push({depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key,created_by:currentUser.id});
     added++;
   }
   // Group by DP code for cross-depot routing
@@ -1979,7 +1979,7 @@ async function importRowsToDepot(rows, targetDepot){
       remark: row.remark || null,
       row_label: 'R'+String(slot.r).padStart(2,'0'),
       bay: slot.b, tier: slot.t, slot_key: key,
-      created_by: currentUser.id, updated_by: currentUser.id
+      created_by: currentUser.id
     });
     added++;
   }
@@ -2072,7 +2072,7 @@ async function parseRows(rows){
     const key=sk(slot.r,slot.b,slot.t);
     existingCnums.add(cnum);
     C[key]={cnum,line,size,grade,date_in:date,remark,r:slot.r,b:slot.b,t:slot.t,key,id:null};
-    inserts.push({depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key,created_by:currentUser.id,updated_by:currentUser.id});
+    inserts.push({depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key,created_by:currentUser.id});
     added++;
   }
   if(inserts.length){
@@ -2192,7 +2192,7 @@ async function loadDemo(){
       const daysAgo=Math.floor(Math.random()*35);
       const dateIn=new Date(Date.now()-daysAgo*86400000).toISOString().slice(0,10);
       C[key]={cnum:(pfx[line]||'MSCU')+String(n++).padStart(7,'0'),line,size:Math.random()>.4?'40':'20',grade,date_in:dateIn,remark:remarks[grade],r,b,t,key};
-      inserts.push({depot_id:currentDepot.id,...C[key],row_label:'R'+String(r).padStart(2,'0'),bay:b,tier:t,slot_key:key,created_by:currentUser.id,updated_by:currentUser.id});
+      inserts.push({depot_id:currentDepot.id,...C[key],row_label:'R'+String(r).padStart(2,'0'),bay:b,tier:t,slot_key:key,created_by:currentUser.id});
     }
   }
   await sb.from('containers').delete().eq('depot_id',currentDepot.id);
