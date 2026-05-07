@@ -1567,26 +1567,34 @@ function parseCSV(text){
 function detectAndParse(rows){
   console.log('IMPORT STEP 2: detectAndParse rows=', rows?.length);
   if(!rows||!rows.length)return;
-  // Find header row
+  // Find header row - look for row with MULTIPLE non-empty cols (actual column header)
+  // Skip title rows like "DANH SACH CONTAINER..." which have only 1-2 filled cells
   let headerRow=-1;
   for(let i=0;i<Math.min(rows.length,15);i++){
+    const nonEmpty=rows[i].filter(c=>String(c||'').trim()!=='').length;
     const rowStr=rows[i].join('|').toLowerCase();
-    console.log('IMPORT ROW '+i+':', rows[i].slice(0,5).join(' | '));
-    // Legacy: has 'container' keyword anywhere, or many columns (>=15)
-    if(rowStr.includes('soácontainer')||rowStr.includes('container')||rowStr.includes('cnum')||rowStr.includes('số cont')||rowStr.includes('s container')||rowStr.includes('soà container')||rowStr.includes('soa container')){
+    console.log('IMPORT ROW '+i+' ('+nonEmpty+' cols):', rows[i].slice(0,5).join(' | '));
+    // Must have >= 4 non-empty cells to be a real header row
+    // AND contain container/stt/số keyword
+    if(nonEmpty>=4 && (rowStr.includes('container')||rowStr.includes('cnum')||rowStr.includes('stt')||rowStr.includes('số cont'))){
       headerRow=i;break;
     }
-    // Also detect by column count - legacy Giang Nam has 15+ columns in data rows
-    if(i>0 && rows[i].filter(c=>c!=='').length>=15){
-      headerRow=i-1;break; // header is previous row
+  }
+  // Fallback: find first data row with >=10 cols (legacy format data rows)
+  if(headerRow<0){
+    for(let i=0;i<Math.min(rows.length,15);i++){
+      if(rows[i].filter(c=>String(c||'').trim()!=='').length>=10){
+        headerRow=Math.max(0,i-1);
+        console.log('IMPORT fallback headerRow=',headerRow,'(data at row',i,')');
+        break;
+      }
     }
   }
-  console.log('IMPORT headerRow=', headerRow, headerRow>=0?'hdr:'+rows[headerRow]?.slice(0,4).join('|'):'');
+  console.log('IMPORT headerRow=', headerRow, headerRow>=0?'hdr:'+rows[headerRow]?.slice(0,5).join('|'):'');
   if(headerRow>=0){
     const hdr=rows[headerRow];
-    // isLegacy: has Bay/Row, Ngay, or many cols (>=12), or no standard headers
     const hdrStr=hdr.join('|');
-    const isLegacy=hdrStr.includes('Bay/Row')||hdrStr.includes('Ngaøy')||hdrStr.includes('Ngày')||hdrStr.includes('Soá')||hdrStr.includes('Stt')||hdrStr.includes('STT')||(hdr.filter(h=>h!=='').length>=12&&!hdrStr.toLowerCase().includes('grade'));
+    const isLegacy=hdrStr.includes('Bay/Row')||hdrStr.includes('Ngaøy')||hdrStr.includes('Ngày')||hdrStr.includes('Soá')||hdrStr.includes('Stt')||hdrStr.includes('STT')||(hdr.filter(h=>h!=='').length>=8&&!hdrStr.toLowerCase().includes('grade'));
     console.log('IMPORT isLegacy=', isLegacy, 'hdrCols=', hdr.filter(h=>h!=='').length);
     if(isLegacy){
       parseLegacyFormat(rows,headerRow);
@@ -1594,11 +1602,9 @@ function detectAndParse(rows){
       parseStandardFormat(rows,headerRow);
     }
   }else{
-    // No header found - if data has many cols, try legacy
-    const maxCols = Math.max(...rows.slice(0,5).map(r=>r.filter(c=>c!=='').length));
-    console.log('IMPORT no header, maxCols=', maxCols);
-    if(maxCols>=12) parseLegacyFormat(rows,0);
-    else parseStandardFormat(rows,0);
+    // Last resort: treat whole file as legacy from row 0
+    console.log('IMPORT no header found, forcing legacy');
+    parseLegacyFormat(rows,0);
   }
 }
 
