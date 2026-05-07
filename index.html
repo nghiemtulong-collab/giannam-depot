@@ -1441,7 +1441,7 @@ async function createDepot(){
   if(!name||!code){notif('Điền tên và code');return}
   const{error}=await sb.from('depots').insert({name,code,rows,bays,tiers});
   if(error){notif('Lỗi: '+error.message);return}
-  closeOv('ov-create-depot');loadAdminData();notif('Tạo depot: '+name);
+  closeOv('ov-create-depot');await loadAdminData();notif('Tạo depot: '+name);
 }
 function openCreateDepot(){document.getElementById('ov-create-depot').style.display='flex'}
 async function deleteDepot(id,name,code){
@@ -1629,7 +1629,6 @@ async function parseLegacyFormat(rows,headerRow){
     inserts.push({
       depot_id:currentDepot.id,cnum,line,size,grade,
       date_in:date,remark:fullRemark||null,
-      est_cost:estCost,
       row_label:'R'+String(slot.r).padStart(2,'0'),
       bay:slot.b,tier:slot.t,slot_key:key,
       created_by:currentUser.id,updated_by:currentUser.id
@@ -1701,7 +1700,7 @@ async function parseStandardFormat(rows,headerRow){
     if(!slot){skipped++;continue}
     const key=sk(slot.r,slot.b,slot.t);
     occupiedSlots.add(key);existingConts.add(cnum);
-    inserts.push({depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,est_cost:estCost,row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key,created_by:currentUser.id,updated_by:currentUser.id});
+    inserts.push({depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key,created_by:currentUser.id,updated_by:currentUser.id});
     added++;
   }
   // Group by DP code for cross-depot routing
@@ -1978,7 +1977,6 @@ async function importRowsToDepot(rows, targetDepot){
       cnum: row.cnum, line: row.line, size: row.size,
       grade: row.grade, date_in: row.date,
       remark: row.remark || null,
-      est_cost: row.estCost || null,
       row_label: 'R'+String(slot.r).padStart(2,'0'),
       bay: slot.b, tier: slot.t, slot_key: key,
       created_by: currentUser.id, updated_by: currentUser.id
