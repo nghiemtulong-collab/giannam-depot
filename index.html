@@ -2196,7 +2196,7 @@ async function loadDemo(){
       const daysAgo=Math.floor(Math.random()*35);
       const dateIn=new Date(Date.now()-daysAgo*86400000).toISOString().slice(0,10);
       C[key]={cnum:(pfx[line]||'MSCU')+String(n++).padStart(7,'0'),line,size:Math.random()>.4?'40':'20',grade,date_in:dateIn,remark:remarks[grade],r,b,t,key};
-      inserts.push({depot_id:currentDepot.id,...C[key],row_label:'R'+String(r).padStart(2,'0'),bay:b,tier:t,slot_key:key});
+      inserts.push({depot_id:currentDepot.id,cnum:C[key].cnum,line:C[key].line,size:C[key].size,grade:C[key].grade,date_in:C[key].date_in,remark:C[key].remark||null,row_label:'R'+String(r).padStart(2,'0'),bay:b,tier:t,slot_key:key});
     }
   }
   await sb.from('containers').delete().eq('depot_id',currentDepot.id);
