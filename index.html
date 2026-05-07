@@ -1756,7 +1756,7 @@ async function checkCrossDepot(parsedGroups){
       return;
     }
     if(!dpMatchesCurrent && (perm('canAdmin')||currentProfile?.role==='manager')){
-      if(!confirm('File nay chua cont cua '+dp+' nhung ban dang o '+currentDepot?.name+'. Van import vao depot hien tai?'))return;
+      notif('Import '+rows.length+' cont ('+dp+') → '+(currentDepot?.name||''));
     }
     await doDirectImport(rows);
     return;
