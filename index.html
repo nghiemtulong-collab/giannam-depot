@@ -815,8 +815,7 @@ async function dbLog(type,desc,detail,cid,cnum){
   if(!currentDepot)return;
   await sb.from('history').insert({
     depot_id:currentDepot.id,container_id:cid||null,cnum:cnum||null,
-    action_type:type,description:desc,detail:detail||'',
-    created_by:currentUser?.id
+    action_type:type,description:desc,detail:detail||''
   });
 }
 
@@ -891,8 +890,7 @@ async function addCont(){
   const key=sk(slot.r,slot.b,slot.t);
   const{data,error}=await sb.from('containers').insert({
     depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,
-    row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key,
-    created_by:currentUser.id
+    row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key
   }).select().single();
   if(error){
     if(error.code==='23505')notif('Container '+cnum+' đã tồn tại hoặc slot bị chiếm — vui lòng reload');
@@ -1020,7 +1018,7 @@ async function confirmMove(){
   const src=C[moveFrom];
   // DB
   await sb.from('containers').update({row_label:'R'+String(to.r).padStart(2,'0'),bay:to.b,tier:to.t,slot_key:tkey,updated_by:currentUser.id}).eq('id',src.id);
-  await sb.from('moves').insert({depot_id:currentDepot.id,container_id:src.id,cnum:src.cnum,from_slot:moveFrom,to_slot:tkey,note,status:'done',created_by:currentUser.id,done_at:new Date().toISOString()});
+  await sb.from('moves').insert({depot_id:currentDepot.id,container_id:src.id,cnum:src.cnum,from_slot:moveFrom,to_slot:tkey,note,status:'done',done_at:new Date().toISOString()});
   await dbLog('move',`${src.cnum}: ${moveFrom}→${tkey}`,note,src.id,src.cnum);
   moves.push({from:moveFrom,to:tkey,cnum:src.cnum,note,time:ts()});
   C[tkey]={...src,r:to.r,b:to.b,t:to.t,key:tkey,hl:true};
@@ -1376,6 +1374,10 @@ async function showView(v){
   });
   document.getElementById('searchbar').style.display=v==='yard'?'':'none';
   document.getElementById('statbar').style.display=v==='yard'?'':'none';
+  // Hide sidebar on non-yard views for full-width layout
+  const sb=document.querySelector('.sidebar');
+  if(sb)sb.style.display=v==='yard'?'':'none';
+  if(v==='yard'){renderAll();renderPlan();}
   if(v==='kpi')await renderKPI();
   if(v==='history'){await loadHistory();renderHistView();}
   if(v==='admin')await loadAdminData();
@@ -1630,8 +1632,7 @@ async function parseLegacyFormat(rows,headerRow){
       depot_id:currentDepot.id,cnum,line,size,grade,
       date_in:date,remark:fullRemark||null,
       row_label:'R'+String(slot.r).padStart(2,'0'),
-      bay:slot.b,tier:slot.t,slot_key:key,
-      created_by:currentUser.id
+      bay:slot.b,tier:slot.t,slot_key:key
     });
     added++;
   }
@@ -1700,7 +1701,7 @@ async function parseStandardFormat(rows,headerRow){
     if(!slot){skipped++;continue}
     const key=sk(slot.r,slot.b,slot.t);
     occupiedSlots.add(key);existingConts.add(cnum);
-    inserts.push({depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key,created_by:currentUser.id});
+    inserts.push({depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key});
     added++;
   }
   // Group by DP code for cross-depot routing
@@ -1920,8 +1921,7 @@ async function executeXDepotImport(){
         depot_id: targetDepot.id,
         action_type:'add',
         description:'Cross-depot import '+added+' containers → '+targetDepot.name,
-        detail:'dup: '+dup,
-        created_by: currentUser.id
+        detail:'dup: '+dup
       });
     }
   }
@@ -1978,8 +1978,7 @@ async function importRowsToDepot(rows, targetDepot){
       grade: row.grade, date_in: row.date,
       remark: row.remark || null,
       row_label: 'R'+String(slot.r).padStart(2,'0'),
-      bay: slot.b, tier: slot.t, slot_key: key,
-      created_by: currentUser.id
+      bay: slot.b, tier: slot.t, slot_key: key
     });
     added++;
   }
@@ -2072,7 +2071,7 @@ async function parseRows(rows){
     const key=sk(slot.r,slot.b,slot.t);
     existingCnums.add(cnum);
     C[key]={cnum,line,size,grade,date_in:date,remark,r:slot.r,b:slot.b,t:slot.t,key,id:null};
-    inserts.push({depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key,created_by:currentUser.id});
+    inserts.push({depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key});
     added++;
   }
   if(inserts.length){
@@ -2192,7 +2191,7 @@ async function loadDemo(){
       const daysAgo=Math.floor(Math.random()*35);
       const dateIn=new Date(Date.now()-daysAgo*86400000).toISOString().slice(0,10);
       C[key]={cnum:(pfx[line]||'MSCU')+String(n++).padStart(7,'0'),line,size:Math.random()>.4?'40':'20',grade,date_in:dateIn,remark:remarks[grade],r,b,t,key};
-      inserts.push({depot_id:currentDepot.id,...C[key],row_label:'R'+String(r).padStart(2,'0'),bay:b,tier:t,slot_key:key,created_by:currentUser.id});
+      inserts.push({depot_id:currentDepot.id,...C[key],row_label:'R'+String(r).padStart(2,'0'),bay:b,tier:t,slot_key:key});
     }
   }
   await sb.from('containers').delete().eq('depot_id',currentDepot.id);
