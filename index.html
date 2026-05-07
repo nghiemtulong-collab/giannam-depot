@@ -1792,12 +1792,29 @@ async function checkCrossDepot(parsedGroups){
     return;
   }
 
-  // Multi-depot detected - merge all into currentDepot and import directly
-  // Flatten all groups into single array
-  const allRows = dpCodes.reduce((acc, dp) => acc.concat(parsedGroups[dp]), []);
-  console.log('IMPORT multi-depot: merging', dpCodes, 'total', allRows.length, 'cont → currentDepot');
-  notif('Import ' + allRows.length + ' cont từ ' + dpCodes.length + ' depot → ' + (currentDepot?.name||''));
-  await doDirectImport(allRows);
+  // Multi-depot detected - show modal for user to confirm routing
+  const{data:allDepots} = await sb.from('depots').select('*').order('created_at');
+  
+  const groups = {};
+  for(const dp of dpCodes){
+    const existingDepot = (allDepots||[]).find(d =>
+      d.code.toUpperCase() === dp.toUpperCase() ||
+      d.name.toUpperCase().includes(dp.toUpperCase())
+    );
+    groups[dp] = {
+      rows: parsedGroups[dp],
+      existingDepot: existingDepot || null,
+      action: existingDepot ? 'existing' : 'create',
+      newDepotName: dp
+    };
+  }
+
+  pendingXImport = { groups, allDepots: allDepots||[] };
+  renderXDepotModal();
+  // Bring modal to front
+  const modal = document.getElementById('ov-xdepot');
+  modal.style.display='flex';
+  modal.style.zIndex='99999';
 }
 
 function renderXDepotModal(){
