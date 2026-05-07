@@ -1611,6 +1611,8 @@ function detectAndParse(rows){
 // Parser for Phuc Long/Giang Nam legacy Excel format
 async function parseLegacyFormat(rows,headerRow){
   console.log('IMPORT STEP 3: parseLegacyFormat headerRow=', headerRow);
+  console.log('IMPORT STEP 3 header row content:', rows[headerRow]);
+  console.log('IMPORT STEP 3 first data row:', rows[headerRow+1]);
   // Fixed column positions based on actual file structure:
   // col0=Stt, col1=ContNo, col4=Size, col5=Line, col6=DateIn
   // col8=ST(grade), col9=BayRow, col13=Remark, col14=Days, col15=DP, col17=EstCost
@@ -1756,7 +1758,7 @@ let pendingXImport = null;
 
 // FIX: doDirectImport was called but missing - import all rows to currentDepot
 async function doDirectImport(rows){
-  console.log('IMPORT STEP 5: doDirectImport rows=', rows?.length);
+  console.log('IMPORT STEP 5: doDirectImport rows=', rows?.length, 'sample:', JSON.stringify(rows?.[0]));
   if(!rows||!rows.length){notif('Không có dữ liệu hợp lệ');return}
   const{added,dup,skip}=await importRowsToDepot(rows,currentDepot);
   await dbLog('add','Import '+added+' containers','Direct import');
@@ -1790,27 +1792,12 @@ async function checkCrossDepot(parsedGroups){
     return;
   }
 
-  // Multi-depot detected - load existing depots
-  const{data:allDepots} = await sb.from('depots').select('*').order('created_at');
-  
-  // Build group info
-  const groups = {};
-  for(const dp of dpCodes){
-    const existingDepot = (allDepots||[]).find(d =>
-      d.code.toUpperCase() === dp.toUpperCase() ||
-      d.name.toUpperCase().includes(dp.toUpperCase())
-    );
-    groups[dp] = {
-      rows: parsedGroups[dp],
-      existingDepot: existingDepot || null,
-      action: existingDepot ? 'existing' : 'create',  // default
-      newDepotName: dp
-    };
-  }
-
-  pendingXImport = { groups, allDepots: allDepots||[] };
-  renderXDepotModal();
-  document.getElementById('ov-xdepot').style.display='flex';
+  // Multi-depot detected - merge all into currentDepot and import directly
+  // Flatten all groups into single array
+  const allRows = dpCodes.reduce((acc, dp) => acc.concat(parsedGroups[dp]), []);
+  console.log('IMPORT multi-depot: merging', dpCodes, 'total', allRows.length, 'cont → currentDepot');
+  notif('Import ' + allRows.length + ' cont từ ' + dpCodes.length + ' depot → ' + (currentDepot?.name||''));
+  await doDirectImport(allRows);
 }
 
 function renderXDepotModal(){
