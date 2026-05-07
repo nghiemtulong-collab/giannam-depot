@@ -1988,10 +1988,19 @@ async function importRowsToDepot(rows, targetDepot){
     added++;
   }
 
+  console.log('DEBUG first insert:', JSON.stringify(inserts[0]));
   for(let i=0;i<inserts.length;i+=100){
     const batch=inserts.slice(i,i+100);
     const{error}=await sb.from('containers').insert(batch);
-    if(error&&error.code!=='23505') notif('Batch error: '+error.message);
+    if(error){
+      if(error.code!=='23505'){
+        console.error('INSERT ERROR full:', JSON.stringify({msg:error.message,det:error.details,hint:error.hint,sample:batch[0]}));
+        notif('Lỗi: '+error.message);
+        return {added, dup, skip};
+      }
+    } else {
+      added += batch.length;
+    }
   }
   return {added, dup, skip};
 }
