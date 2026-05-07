@@ -1212,7 +1212,7 @@ function renderStats(){
   document.getElementById('s-out').textContent=all.filter(c=>c.grade==='OUT').length;
   document.getElementById('s-total').textContent=total;
   document.getElementById('s-occ').textContent=Math.round(total/CAP*100)+'%';
-  document.getElementById('s-moves').textContent=moves.length;
+  const smEl=document.getElementById('s-moves');if(smEl)smEl.textContent=moves.length;
   document.getElementById('s-aging').textContent=all.filter(c=>daysSince(c.date_in)>=14).length;
   const rfEl=document.getElementById('s-rf');
   if(rfEl)rfEl.textContent=all.filter(c=>c.size&&c.size.includes('RF')).length;
