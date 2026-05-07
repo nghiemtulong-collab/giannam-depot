@@ -1376,8 +1376,11 @@ async function showView(v){
   document.getElementById('statbar').style.display=v==='yard'?'':'none';
   // Hide sidebar on non-yard views for full-width layout
   const sb=document.querySelector('.sidebar');
-  if(sb)sb.style.display=v==='yard'?'':'none';
-  if(v==='yard'){renderAll();renderPlan();}
+  if(sb)sb.style.display=v==='yard'?'flex':'none';
+  if(v==='yard'){
+    // Allow DOM to update before rendering grid
+    requestAnimationFrame(()=>{renderAll();renderPlan();});
+  }
   if(v==='kpi')await renderKPI();
   if(v==='history'){await loadHistory();renderHistView();}
   if(v==='admin')await loadAdminData();
@@ -1735,6 +1738,8 @@ async function doDirectImport(rows){
   if(!rows||!rows.length){notif('Không có dữ liệu hợp lệ');return}
   const{added,dup,skip}=await importRowsToDepot(rows,currentDepot);
   await dbLog('add','Import '+added+' containers','Direct import');
+  // Reload containers from DB before rendering so grid reflects new data
+  await loadContainers();
   renderAll();
   notif('Import: '+added+(dup?' | '+dup+' dup':'')+(skip?' | '+skip+' err':''));
 }
