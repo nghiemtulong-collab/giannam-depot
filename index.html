@@ -1640,23 +1640,42 @@ async function parseLegacyFormat(rows,headerRow){
     const estCostRaw=String(row[COL.estcost]||'').trim();
     const estCost=estCostRaw&&!isNaN(parseFloat(estCostRaw))?parseFloat(estCostRaw):null;
 
+    // Parse slot from Bay/Row field
+    const parsedSlot = parseBayRowToSlot(bayrow);
+
     // Build enhanced remark with bay/row info
     let fullRemark=remark||'';
     if(bayrow&&bayrow!=='0')fullRemark=(bayrow+(fullRemark?' | '+fullRemark:'')).trim();
     if(dp&&dp!=='0')fullRemark=(fullRemark?fullRemark+' | ':'')+dp;
 
-    // Find free slot
-    const slot=findNextFreeSlot(occupiedSlots);
-    if(!slot){skipped++;continue}
-    const key=sk(slot.r,slot.b,slot.t);
-    occupiedSlots.add(key);
+    // Use parsed slot if available, otherwise auto-assign
+    let slotData;
+    if(parsedSlot){
+      const key=sk(parsedSlot.r,parsedSlot.b,parsedSlot.t);
+      // If slot already taken, find next free adjacent slot same row
+      if(occupiedSlots.has(key)){
+        const fallback=findNextFreeSlotInRow(occupiedSlots,parsedSlot.r);
+        if(!fallback){skipped++;continue}
+        slotData={r:fallback.r,b:fallback.b,t:fallback.t,key:sk(fallback.r,fallback.b,fallback.t)};
+      }else{
+        slotData={r:parsedSlot.r,b:parsedSlot.b,t:parsedSlot.t,key};
+      }
+    }else{
+      const slot=findNextFreeSlot(occupiedSlots);
+      if(!slot){skipped++;continue}
+      slotData={r:slot.r,b:slot.b,t:slot.t,key:sk(slot.r,slot.b,slot.t)};
+    }
+
+    occupiedSlots.add(slotData.key);
     existingConts.add(cnum);
 
     inserts.push({
       depot_id:currentDepot.id,cnum,line,size,grade,
       date_in:date,remark:fullRemark||null,
-      row_label:'R'+String(slot.r).padStart(2,'0'),
-      bay:slot.b,tier:slot.t,slot_key:key
+      row_label:'R'+String(slotData.r).padStart(2,'0'),
+      bay:slotData.b,tier:slotData.t,slot_key:slotData.key,
+      // Pass through for importRowsToDepot
+      _row:slotData.r,_bay:slotData.b,_tier:slotData.t
     });
     added++;
   }
@@ -1671,7 +1690,8 @@ async function parseLegacyFormat(rows,headerRow){
     dpGroups[dpCode].push({
       cnum: ins.cnum, line: ins.line, size: ins.size,
       grade: ins.grade, date: ins.date_in,
-      remark: ins.remark, estCost: ins.estCost
+      remark: ins.remark, estCost: ins.estCost,
+      _row: ins._row, _bay: ins._bay, _tier: ins._tier
     });
   }
 
@@ -1982,6 +2002,62 @@ async function executeXDepotImport(){
   notif('✓ Cross-depot import: '+totalAdded+' containers'+(totalDup?' | '+totalDup+' dup':'')+(totalSkip?' | '+totalSkip+' err':''));
 }
 
+// ── BAY/ROW PARSER ──
+// Convert Phuc Long Bay/Row notation to internal r/b/t coordinates
+// DP2 format: "D25.." → Row D=4, Bay 25, Tier 1 (stack from T1)
+// DP3 format: "N08.03.01" → Row N=14, Bay 8, Tier 3
+// Row letter mapping: A=1,B=2,C=3,D=4,E=5,F=6,G=7,H=8,I=9,J=10,K=11,L=12,M=13,N=14,...
+// Special: CC=3 (C-block), CK=3, SC=19, T=20
+function parseBayRowToSlot(bayrow){
+  if(!bayrow||bayrow==='0'||bayrow==='nan')return null;
+  const raw=bayrow.trim().toUpperCase().replace(/\.\./g,'');
+
+  // DP3 format: N08.03.01 or T11.04.02 (row.bay.tier.slot)
+  const m3=raw.match(/^([A-Z]+)(\d+)\.(\d+)\.(\d+)/);
+  if(m3){
+    const r=letterToRow(m3[1]);
+    const b=parseInt(m3[2])||1;
+    const t=parseInt(m3[3])||1;
+    return{r:Math.min(r,20),b:Math.min(b,33),t:Math.min(t,5)};
+  }
+
+  // DP2 format: D25, H5, B8, CC, CK, SC, A12 (row + bay)
+  const m2=raw.match(/^([A-Z]+)(\d+)/);
+  if(m2){
+    const r=letterToRow(m2[1]);
+    const b=parseInt(m2[2])||1;
+    return{r:Math.min(r,20),b:Math.min(b,33),t:1};
+  }
+
+  // Just letters (CC, CK, SC) — no bay number
+  const mL=raw.match(/^([A-Z]+)$/);
+  if(mL){
+    const r=letterToRow(mL[1]);
+    return{r:Math.min(r,20),b:1,t:1};
+  }
+  return null;
+}
+
+function letterToRow(letters){
+  const map={'A':1,'B':2,'C':3,'CC':3,'CK':3,'D':4,'E':5,'F':6,'G':7,
+             'H':8,'I':9,'J':10,'K':11,'L':12,'M':13,'N':14,'O':15,
+             'P':16,'Q':17,'R':18,'SC':19,'S':19,'T':20};
+  if(map[letters]!==undefined)return map[letters];
+  // Multi-letter fallback: use first char
+  return map[letters[0]]||1;
+}
+
+// Find next free slot in a specific row (for collision fallback)
+function findNextFreeSlotInRow(occupiedSlots,targetRow,maxBays=33,maxTiers=5){
+  for(let b=1;b<=maxBays;b++)
+    for(let t=1;t<=maxTiers;t++){
+      if(t>1&&!occupiedSlots.has(sk(targetRow,b,t-1)))break;
+      const key=sk(targetRow,b,t);
+      if(!occupiedSlots.has(key))return{r:targetRow,b,t};
+    }
+  return null;
+}
+
 // Import a list of parsed rows into a specific depot
 async function importRowsToDepot(rows, targetDepot){
   // Load existing cnums + slots for target depot
@@ -2009,17 +2085,40 @@ async function importRowsToDepot(rows, targetDepot){
 
   for(const row of rows){
     if(existingCnums.has(row.cnum)){dup++;continue}
-    const slot = findSlot();
-    if(!slot){skip++;continue}
-    const key = sk(slot.r,slot.b,slot.t);
-    occupiedSlots.add(key); existingCnums.add(row.cnum);
+
+    let slotR, slotB, slotT, slotKey;
+
+    // Use pre-parsed slot from parseLegacyFormat if available
+    if(row._row && row._bay && row._tier){
+      const candidateKey = sk(row._row, row._bay, row._tier);
+      if(!occupiedSlots.has(candidateKey)){
+        slotR=row._row; slotB=row._bay; slotT=row._tier; slotKey=candidateKey;
+      } else {
+        // Collision: find next free in same row, then global fallback
+        const fallback = findNextFreeSlotInRow(occupiedSlots, row._row, tBays, tTiers);
+        if(fallback){
+          slotR=fallback.r; slotB=fallback.b; slotT=fallback.t;
+          slotKey=sk(slotR,slotB,slotT);
+        } else {
+          const global=findSlot();
+          if(!global){skip++;continue}
+          slotR=global.r; slotB=global.b; slotT=global.t; slotKey=sk(slotR,slotB,slotT);
+        }
+      }
+    } else {
+      const slot = findSlot();
+      if(!slot){skip++;continue}
+      slotR=slot.r; slotB=slot.b; slotT=slot.t; slotKey=sk(slotR,slotB,slotT);
+    }
+
+    occupiedSlots.add(slotKey); existingCnums.add(row.cnum);
     inserts.push({
       depot_id: targetDepot.id,
       cnum: row.cnum, line: row.line, size: row.size,
       grade: row.grade, date_in: row.date,
       remark: row.remark || null,
-      row_label: 'R'+String(slot.r).padStart(2,'0'),
-      bay: slot.b, tier: slot.t, slot_key: key
+      row_label: 'R'+String(slotR).padStart(2,'0'),
+      bay: slotB, tier: slotT, slot_key: slotKey
     });
   }
 
