@@ -1795,10 +1795,19 @@ async function checkCrossDepot(parsedGroups){
   
   const groups = {};
   for(const dp of dpCodes){
-    const existingDepot = (allDepots||[]).find(d =>
-      d.code.toUpperCase() === dp.toUpperCase() ||
-      d.name.toUpperCase().includes(dp.toUpperCase())
-    );
+    // Normalize: DP2 → "2", DP3 → "3" for flexible matching
+    const dpNum = dp.replace(/^DP/i,'').trim();
+    const existingDepot = (allDepots||[]).find(d => {
+      const code = d.code.toUpperCase();
+      const name = d.name.toUpperCase();
+      return code === dp.toUpperCase() ||
+             code === 'DEPOT'+dpNum ||
+             name === dp.toUpperCase() ||
+             name.includes(dp.toUpperCase()) ||
+             name.includes('DEPOT '+dpNum) ||
+             name.includes('DEPOT'+dpNum) ||
+             (dpNum && name.endsWith(' '+dpNum));
+    });
     groups[dp] = {
       rows: parsedGroups[dp],
       existingDepot: existingDepot || null,
