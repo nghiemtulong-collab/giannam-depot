@@ -1394,7 +1394,10 @@ async function loadAdminData(){
     <td><span class="role-badge ${roleClass[u.role]||'rb-technician'}">${u.role}</span></td>
     <td style="color:var(--text3);font-size:11px">${depots.find(d=>d.id===u.depot_id)?.code||'—'}</td>
     <td><span style="color:${u.active?'var(--green)':'var(--red)'}">● ${u.active?'Active':'Inactive'}</span></td>
-    <td><button class="btn danger" style="padding:3px 8px;font-size:10px" onclick="toggleUser('${u.id}',${u.active})">${u.active?'Deactivate':'Activate'}</button></td>
+    <td style="display:flex;gap:5px">
+      <button class="btn danger" style="padding:3px 8px;font-size:10px" onclick="toggleUser('${u.id}',${u.active})">${u.active?'Deactivate':'Activate'}</button>
+      <button class="btn danger" style="padding:3px 8px;font-size:10px;border-color:#5C1F1F" onclick="deleteUser('${u.id}','${u.full_name}')" title="Xóa tài khoản vĩnh viễn">✕ Xóa</button>
+    </td>
   </tr>`).join('');
   const{data:deps}=await sb.from('depots').select('*').order('created_at');
   depots=deps||[];  // Refresh global depots array
@@ -1404,6 +1407,23 @@ async function loadAdminData(){
 async function toggleUser(id,active){
   await sb.from('profiles').update({active:!active}).eq('id',id);
   loadAdminData();
+}
+async function deleteUser(id,name){
+  if(!perm('canAdmin')){notif('Không có quyền');return}
+  // Prevent self-deletion
+  if(id===currentProfile?.id){notif('Không thể xóa tài khoản đang đăng nhập');return}
+  if(!confirm(`Xóa tài khoản "${name}" vĩnh viễn?\nHành động này không thể hoàn tác.`))return;
+  notif('Đang xóa...');
+  try{
+    // Delete profile first (FK), then auth user via admin API
+    const{error:profErr}=await sb.from('profiles').delete().eq('id',id);
+    if(profErr){notif('Lỗi xóa profile: '+profErr.message);return}
+    // Note: auth.admin.deleteUser() requires service key — not available client-side
+    // Profile deleted → user can no longer login (profile check fails at login)
+    // Their auth account remains but is effectively locked out
+    await loadAdminData();
+    notif('Đã xóa tài khoản: '+name);
+  }catch(e){notif('Lỗi: '+e.message)}
 }
 async function createUser(){
   if(!perm('canAdmin')){notif('Không có quyền');return}
