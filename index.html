@@ -1812,7 +1812,9 @@ async function checkCrossDepot(parsedGroups){
   // Bring modal to front
   const modal = document.getElementById('ov-xdepot');
   modal.style.display='flex';
-  modal.style.zIndex='99999';
+  modal.style.zIndex='999999';
+  console.log('IMPORT STEP 5: cross-depot modal shown, groups=', dpCodes, 'modal display=', modal.style.display);
+  notif('📦 Phát hiện '+dpCodes.length+' depot — Xem modal để phân loại');
 }
 
 function renderXDepotModal(){
