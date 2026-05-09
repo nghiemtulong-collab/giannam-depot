@@ -249,7 +249,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 .xd-existing{color:var(--green);font-weight:600}
 .xd-new{color:var(--amber);font-weight:600}
 .xd-preview{max-height:120px;overflow-y:auto;margin-top:8px;font-size:10px;font-family:var(--mono);color:var(--text3);border-top:1px solid var(--border);padding-top:6px}
-.notif{position:fixed;bottom:20px;right:20px.notif{position:fixed;bottom:20px;right:20px;background:var(--surface2);color:var(--text);padding:10px 16px;border-radius:var(--radius-lg);font-size:12px;z-index:99999;pointer-events:none;opacity:0;transition:opacity .2s;max-width:340px;border:1px solid var(--border2);font-family:var(--mono);box-shadow:0 4px 20px rgba(0,0,0,.4)}
+.notif{position:fixed;bottom:20px;right:20px;background:var(--surface2);color:var(--text);padding:10px 16px;border-radius:var(--radius-lg);font-size:12px;z-index:99999;pointer-events:none;opacity:0;transition:opacity .2s;max-width:340px;border:1px solid var(--border2);font-family:var(--mono);box-shadow:0 4px 20px rgba(0,0,0,.4)}
 .notif.show{opacity:1}
 
 /* UPLOAD */
@@ -617,8 +617,6 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
     </div>
   </div>
 </div>
-
-div>
 
 <div class="tooltip" id="tooltip"></div>
 <div class="notif" id="notif"></div>
@@ -1375,8 +1373,8 @@ async function showView(v){
   document.getElementById('searchbar').style.display=v==='yard'?'':'none';
   document.getElementById('statbar').style.display=v==='yard'?'':'none';
   // Hide sidebar on non-yard views for full-width layout
-  const sb=document.querySelector('.sidebar');
-  if(sb)sb.style.display=v==='yard'?'flex':'none';
+  const sidebarEl=document.querySelector('.sidebar');
+  if(sidebarEl)sidebarEl.style.display=v==='yard'?'flex':'none';
   if(v==='yard'){
     // Allow DOM to update before rendering grid
     requestAnimationFrame(()=>{renderAll();renderPlan();});
@@ -1673,7 +1671,7 @@ async function parseLegacyFormat(rows,headerRow){
     dpGroups[dpCode].push({
       cnum: ins.cnum, line: ins.line, size: ins.size,
       grade: ins.grade, date: ins.date_in,
-      remark: ins.remark, estCost: ins.est_cost
+      remark: ins.remark, estCost: ins.estCost
     });
   }
 
@@ -1736,7 +1734,7 @@ async function parseStandardFormat(rows,headerRow){
     const dpM=ins.remark&&ins.remark.match(/\b(DP\d+)\b/i);
     const dpC=dpM?dpM[1].toUpperCase():(currentDepot?.code||'DEFAULT');
     if(!dpGroups2[dpC])dpGroups2[dpC]=[];
-    dpGroups2[dpC].push({cnum:ins.cnum,line:ins.line,size:ins.size,grade:ins.grade,date:ins.date_in,remark:ins.remark,estCost:ins.est_cost});
+    dpGroups2[dpC].push({cnum:ins.cnum,line:ins.line,size:ins.size,grade:ins.grade,date:ins.date_in,remark:ins.remark,estCost:ins.estCost});
   }
   const dpCodes2=Object.keys(dpGroups2);
   if(dpCodes2.length>1){
@@ -2012,7 +2010,6 @@ async function importRowsToDepot(rows, targetDepot){
       row_label: 'R'+String(slot.r).padStart(2,'0'),
       bay: slot.b, tier: slot.t, slot_key: key
     });
-    added++;
   }
 
   console.log('DEBUG first insert:', JSON.stringify(inserts[0]));
