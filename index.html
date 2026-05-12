@@ -406,7 +406,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
         <button class="sb-btn" onclick="loadDemo()">Load demo data</button>
         <button class="sb-btn" onclick="clearAll()">Clear yard</button>
       </div>
-      <div class="sb-footer">GN Logistics<br>ICD Cát Lái · Depot 3<br>v6.0 · 2026</div>
+      <div class="sb-footer">GN Logistics<br>ICD Cát Lái · Depot 3<br>v7.3 · 2026</div>
     </div>
 
     <!-- YARD VIEW -->
@@ -731,9 +731,8 @@ async function initApp(user){
   // Setup UI
   document.getElementById('user-name').textContent=prof?.full_name||user.email;
   document.getElementById('user-role').textContent=prof?.role||'user';
-  if(prof?.role==='admin'||prof?.role==='manager'){
-    document.getElementById('nav-admin').style.display='';
-  }
+  // P0 FIX: only canAdmin sees Admin nav (ROLE_PERMS.manager.canAdmin=false)
+  document.getElementById('nav-admin').style.display=perm('canAdmin')?'':'none';
   applyPermissions();
   buildDepotSwitcher();
   // Hide login, show app
@@ -884,8 +883,8 @@ async function addCont(){
   const remark=document.getElementById('a-remark').value.trim()||null;
   const slotStr=document.getElementById('a-slot').value.trim();
 
-  // SPRINT1 FIX: Check duplicate cnum in this depot
-  const{data:existing}=await sb.from('containers').select('id,slot_key').eq('depot_id',currentDepot.id).eq('cnum',cnum).maybeSingle();
+  // SPRINT1 FIX: Check duplicate cnum in this depot (only active, not OUT)
+  const{data:existing}=await sb.from('containers').select('id,slot_key,grade').eq('depot_id',currentDepot.id).eq('cnum',cnum).neq('grade','OUT').maybeSingle();
   if(existing){notif('Container '+cnum+' đã tồn tại tại '+existing.slot_key);return}
 
   let slot=slotStr?parseSk(slotStr):null;
@@ -895,7 +894,7 @@ async function addCont(){
     if(slot.t>1&&!C[sk(slot.r,slot.b,slot.t-1)]){notif('Tầng bên dưới trống');return}
     // SPRINT1 FIX: Verify slot free in DB (not just local state)
     const chkKey=sk(slot.r,slot.b,slot.t);
-    const{data:occ}=await sb.from('containers').select('id,cnum').eq('depot_id',currentDepot.id).eq('slot_key',chkKey).maybeSingle();
+    const{data:occ}=await sb.from('containers').select('id,cnum').eq('depot_id',currentDepot.id).eq('slot_key',chkKey).neq('grade','OUT').maybeSingle();
     if(occ){notif('Slot '+chkKey+' đã có cont '+occ.cnum+' (DB conflict — thử reload)');return}
   }else{
     // SPRINT1 FIX: Find free slot verified against live DB
@@ -919,8 +918,8 @@ async function addCont(){
 
 // SPRINT1: Find free slot verified against live DB
 async function findFreeSlotDB(){
-  const{data:occupied}=await sb.from('containers').select('slot_key').eq('depot_id',currentDepot.id);
-  const occupiedSet=new Set((occupied||[]).map(c=>c.slot_key));
+  const{data:occupied}=await sb.from('containers').select('slot_key').eq('depot_id',currentDepot.id).neq('grade','OUT');
+  const occupiedSet=new Set((occupied||[]).map(c=>c.slot_key).filter(k=>k));
   for(let r=1;r<=ROWS;r++){
     for(let b=1;b<=BAYS;b++){
       for(let t=1;t<=TIERS;t++){
@@ -981,7 +980,22 @@ async function saveDetail(){
   const c=C[detailKey];
   const oldG=c.grade;const newR=document.getElementById('d-remark').value.trim()||null;
   const updates={updated_by:currentUser.id};
-  if(perm('canGrade')&&pendingGrade&&pendingGrade!==oldG){updates.grade=pendingGrade;c.grade=pendingGrade;await dbLog('grade',`${c.cnum}: ${oldG}→${pendingGrade}`,detailKey,c.id,c.cnum)}
+  if(perm('canGrade')&&pendingGrade&&pendingGrade!==oldG){
+    updates.grade=pendingGrade;c.grade=pendingGrade;
+    // P0 FIX: When grade → OUT, container left the yard → release slot
+    // (Otherwise slot stays "occupied" in DB even though hidden from yard view,
+    //  blocking new containers + breaking unique(depot_id, slot_key) constraint)
+    if(pendingGrade==='OUT'){
+      updates.slot_key=null;
+      updates.row_label=null;
+      updates.bay=null;
+      updates.tier=null;
+      c.slot_key=null;c.row_label=null;c.bay=null;c.tier=null;
+      await dbLog('grade',`${c.cnum}: ${oldG}→OUT (slot released)`,detailKey,c.id,c.cnum);
+    }else{
+      await dbLog('grade',`${c.cnum}: ${oldG}→${pendingGrade}`,detailKey,c.id,c.cnum);
+    }
+  }
   if(perm('canEdit')&&newR!==c.remark){updates.remark=newR;c.remark=newR;await dbLog('remark',`${c.cnum}: remark update`,newR,c.id,c.cnum)}
   const newEst=parseFloat(document.getElementById('d-est-cost').value)||0;
   const newAct=parseFloat(document.getElementById('d-actual-cost').value)||0;
@@ -992,6 +1006,8 @@ async function saveDetail(){
   if(Object.keys(updates).length>1){
     await sb.from('containers').update(updates).eq('id',c.id);
   }
+  // P0 FIX: If grade became OUT, remove from local cache so yard renders correctly
+  if(updates.grade==='OUT')delete C[detailKey];
   closeOv('ov-detail');renderAll();notif('Saved: '+c.cnum);
 }
 async function removeCont(){
@@ -1048,8 +1064,18 @@ async function slotClick(key,c,r,b,t){
   if(mode==='qgrade'){
     if(!c||!perm('canGrade'))return;
     const old=c.grade;c.grade=quickGrade;
-    await sb.from('containers').update({grade:quickGrade,updated_by:currentUser.id}).eq('id',c.id);
-    await dbLog('grade',`${c.cnum}: ${old}→${quickGrade}`,key,c.id,c.cnum);
+    // P0 FIX: When grade → OUT, container left the yard → release slot
+    const updatePayload={grade:quickGrade,updated_by:currentUser.id};
+    if(quickGrade==='OUT'){
+      updatePayload.slot_key=null;
+      updatePayload.row_label=null;
+      updatePayload.bay=null;
+      updatePayload.tier=null;
+      c.slot_key=null;c.row_label=null;c.bay=null;c.tier=null;
+      delete C[key];
+    }
+    await sb.from('containers').update(updatePayload).eq('id',c.id);
+    await dbLog('grade',`${c.cnum}: ${old}→${quickGrade}${quickGrade==='OUT'?' (slot released)':''}`,key,c.id,c.cnum);
     renderGrid();renderStats();notif(c.cnum+': '+old+'→'+quickGrade);return;
   }
   if(mode==='move'){
@@ -1380,6 +1406,11 @@ async function clearHistory(){
 
 // ── ADMIN ──
 async function showView(v){
+  // P0 FIX: block non-admin from viewing admin panel
+  if(v==='admin'&&!perm('canAdmin')){
+    notif('Không có quyền truy cập Admin');
+    v='yard';
+  }
   ['yard','kpi','history','admin'].forEach(n=>{
     const el=document.getElementById('view-'+n);
     if(el){el.style.display=n===v?'flex':'none';if(n===v)el.classList.add('active');else el.classList.remove('active')}
@@ -1401,6 +1432,8 @@ async function showView(v){
   if(v==='admin')await loadAdminData();
 }
 async function loadAdminData(){
+  // P0 FIX: block non-admin from loading admin data
+  if(!perm('canAdmin')){notif('Không có quyền');return}
   const{data:users}=await sb.from('profiles').select('*').order('created_at');
   const tbody=document.getElementById('user-tbody');
   if(!users||!users.length){tbody.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:20px;font-family:var(--mono)">No users</td></tr>';return}
@@ -1422,6 +1455,8 @@ async function loadAdminData(){
   await renderAdminDepotTable(deps);
 }
 async function toggleUser(id,active){
+  if(!perm('canAdmin')){notif('Không có quyền');return}
+  if(id===currentProfile?.id){notif('Không thể khóa tài khoản đang đăng nhập');return}
   await sb.from('profiles').update({active:!active}).eq('id',id);
   loadAdminData();
 }
@@ -1483,7 +1518,7 @@ async function createDepot(){
   if(error){notif('Lỗi: '+error.message);return}
   closeOv('ov-create-depot');await loadAdminData();notif('Tạo depot: '+name);
 }
-function openCreateDepot(){document.getElementById('ov-create-depot').style.display='flex'}
+function openCreateDepot(){if(!perm('canAdmin')){notif('Không có quyền');return}document.getElementById('ov-create-depot').style.display='flex'}
 async function deleteDepot(id,name,code){
   if(!perm('canAdmin')){notif('Không có quyền');return}
   if(code==='DEPOT3'){notif('Không thể xóa depot mặc định');return}
@@ -1680,40 +1715,34 @@ async function parseLegacyFormat(rows,headerRow){
     // Parse slot from Bay/Row field
     const parsedSlot = parseBayRowToSlot(bayrow);
 
+    // P1 FIX: Flag unparseable Bay/Row (e.g. "10..") so user knows
+    const bayrowUnparsed = bayrow && bayrow!=='0' && !parsedSlot;
+
+    // P1 FIX: Detect A/B suffix (H4A, H4B, H6A etc) — currently collapses to same slot
+    // Preserve full original bayrow string in remark so info isn't lost
+    const hasAbSuffix = bayrow && /^[A-Z]+\d+[A-Z]/i.test(bayrow.replace(/\.\./g,''));
+
     // Build enhanced remark with bay/row info
     let fullRemark=remark||'';
     if(bayrow&&bayrow!=='0')fullRemark=(bayrow+(fullRemark?' | '+fullRemark:'')).trim();
     if(dp&&dp!=='0')fullRemark=(fullRemark?fullRemark+' | ':'')+dp;
+    if(bayrowUnparsed)fullRemark='⚠️UNPARSED | '+fullRemark;
 
-    // Use parsed slot if available, otherwise auto-assign
-    let slotData;
-    if(parsedSlot){
-      const key=sk(parsedSlot.r,parsedSlot.b,parsedSlot.t);
-      // If slot already taken, find next free adjacent slot same row
-      if(occupiedSlots.has(key)){
-        const fallback=findNextFreeSlotInRow(occupiedSlots,parsedSlot.r);
-        if(!fallback){skipped++;continue}
-        slotData={r:fallback.r,b:fallback.b,t:fallback.t,key:sk(fallback.r,fallback.b,fallback.t)};
-      }else{
-        slotData={r:parsedSlot.r,b:parsedSlot.b,t:parsedSlot.t,key};
-      }
-    }else{
-      const slot=findNextFreeSlot(occupiedSlots);
-      if(!slot){skipped++;continue}
-      slotData={r:slot.r,b:slot.b,t:slot.t,key:sk(slot.r,slot.b,slot.t)};
-    }
-
-    occupiedSlots.add(slotData.key);
-    existingConts.add(cnum);
-
+    // P0 FIX: Do NOT resolve collision against currentDepot here.
+    // Just store desired position. Real collision resolution happens in
+    // importRowsToDepot() per target depot — because DP2 and DP3 conts
+    // can legitimately occupy the same slot key in their respective depots.
     inserts.push({
       depot_id:currentDepot.id,cnum,line,size,grade,
       date_in:date,remark:fullRemark||null,
       est_cost:estCost,
-      row_label:'R'+String(slotData.r).padStart(2,'0'),
-      bay:slotData.b,tier:slotData.t,slot_key:slotData.key,
-      // Pass through for importRowsToDepot
-      _row:slotData.r,_bay:slotData.b,_tier:slotData.t,
+      // Desired slot from file — to be resolved per target depot
+      _desiredRow: parsedSlot?.r || null,
+      _desiredBay: parsedSlot?.b || null,
+      _desiredTier: parsedSlot?.t || null,
+      _bayrowRaw: bayrow,
+      _bayrowUnparsed: bayrowUnparsed,
+      _hasAbSuffix: hasAbSuffix,
       estCost
     });
     added++;
@@ -1731,7 +1760,9 @@ async function parseLegacyFormat(rows,headerRow){
       grade: ins.grade, date: ins.date_in,
       remark: ins.remark, estCost: ins.estCost,
       est_cost: ins.est_cost,
-      _row: ins._row, _bay: ins._bay, _tier: ins._tier
+      _desiredRow: ins._desiredRow,
+      _desiredBay: ins._desiredBay,
+      _desiredTier: ins._desiredTier
     });
   }
 
@@ -1774,8 +1805,7 @@ async function parseStandardFormat(rows,headerRow){
     if(!cnum||cnum.length<4)continue;
     if(existingConts.has(cnum)){duplicates++;continue}
     const line=matchLine(idx.line>=0?String(row[idx.line]||''):'');
-    const sr=(idx.size>=0?String(row[idx.size]||'40'):'40').replace(/[^0-9]/g,'');
-    const size=sr==='20'?'20':'40';
+    const size=matchSize(idx.size>=0?String(row[idx.size]||'40HC'):'40HC');
     const grade=matchGrade(idx.grade>=0?String(row[idx.grade]||'B'):'B');
     const date=parseDate(idx.date>=0?String(row[idx.date]||''):'');
     const remark=(idx.remark>=0?String(row[idx.remark]||''):'').trim()||null;
@@ -1811,7 +1841,7 @@ async function parseStandardFormat(rows,headerRow){
     if(!slot){skipped++;continue}
     const key=sk(slot.r,slot.b,slot.t);
     occupiedSlots.add(key);existingConts.add(cnum);
-    inserts.push({depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,est_cost:estCost,row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key,estCost,_row:slot.r,_bay:slot.b,_tier:slot.t});
+    inserts.push({depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,est_cost:estCost,row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key,estCost,_desiredRow:parsedSlot?.r||slot.r,_desiredBay:parsedSlot?.b||slot.b,_desiredTier:parsedSlot?.t||slot.t});
     added++;
   }
   // Group by DP code for cross-depot routing
@@ -1820,7 +1850,7 @@ async function parseStandardFormat(rows,headerRow){
     const dpM=ins.remark&&ins.remark.match(/\b(DP\d+)\b/i);
     const dpC=dpM?dpM[1].toUpperCase():(currentDepot?.code||'DEFAULT');
     if(!dpGroups2[dpC])dpGroups2[dpC]=[];
-    dpGroups2[dpC].push({cnum:ins.cnum,line:ins.line,size:ins.size,grade:ins.grade,date:ins.date_in,remark:ins.remark,estCost:ins.estCost,est_cost:ins.est_cost,_row:ins._row,_bay:ins._bay,_tier:ins._tier});
+    dpGroups2[dpC].push({cnum:ins.cnum,line:ins.line,size:ins.size,grade:ins.grade,date:ins.date_in,remark:ins.remark,estCost:ins.estCost,est_cost:ins.est_cost,_desiredRow:ins._desiredRow,_desiredBay:ins._desiredBay,_desiredTier:ins._desiredTier});
   }
   const dpCodes2=Object.keys(dpGroups2);
   if(dpCodes2.length>1){
@@ -2137,10 +2167,10 @@ function findNextFreeSlotInRow(occupiedSlots,targetRow,maxBays=33,maxTiers=5){
 
 // Import a list of parsed rows into a specific depot
 async function importRowsToDepot(rows, targetDepot){
-  // Load existing cnums + slots for target depot
-  const{data:existing} = await sb.from('containers').select('cnum,slot_key').eq('depot_id', targetDepot.id);
+  // Load existing cnums + slots for target depot (excluding OUT — released containers can return)
+  const{data:existing} = await sb.from('containers').select('cnum,slot_key,grade').eq('depot_id', targetDepot.id).neq('grade','OUT');
   const existingCnums = new Set((existing||[]).map(c=>c.cnum));
-  const occupiedSlots = new Set((existing||[]).map(c=>c.slot_key));
+  const occupiedSlots = new Set((existing||[]).map(c=>c.slot_key).filter(k=>k));
 
   const tRows = targetDepot.rows || 20;
   const tBays = targetDepot.bays || 33;
@@ -2165,14 +2195,20 @@ async function importRowsToDepot(rows, targetDepot){
 
     let slotR, slotB, slotT, slotKey;
 
-    // Use pre-parsed slot from parseLegacyFormat if available
-    if(row._row && row._bay && row._tier){
-      const candidateKey = sk(row._row, row._bay, row._tier);
+    // P0 FIX: Resolve slot per-depot using desired position from file
+    // (Previously resolved against currentDepot in parser → wrong when DP2 and DP3 conts
+    // shared slot keys; collision was resolved against current depot's occupied set, not target)
+    const desiredR = row._desiredRow || row._row;
+    const desiredB = row._desiredBay || row._bay;
+    const desiredT = row._desiredTier || row._tier;
+
+    if(desiredR && desiredB && desiredT){
+      const candidateKey = sk(desiredR, desiredB, desiredT);
       if(!occupiedSlots.has(candidateKey)){
-        slotR=row._row; slotB=row._bay; slotT=row._tier; slotKey=candidateKey;
+        slotR=desiredR; slotB=desiredB; slotT=desiredT; slotKey=candidateKey;
       } else {
-        // Collision: find next free in same row, then global fallback
-        const fallback = findNextFreeSlotInRow(occupiedSlots, row._row, tBays, tTiers);
+        // Collision in TARGET depot: find next free in same row, then global fallback
+        const fallback = findNextFreeSlotInRow(occupiedSlots, desiredR, tBays, tTiers);
         if(fallback){
           slotR=fallback.r; slotB=fallback.b; slotT=fallback.t;
           slotKey=sk(slotR,slotB,slotT);
@@ -2221,12 +2257,14 @@ async function importRowsToDepot(rows, targetDepot){
 // ── CROSS-DEPOT IMPORT ──
 // Shared helpers
 async function loadExistingCnums(){
-  const{data}=await sb.from('containers').select('cnum').eq('depot_id',currentDepot.id);
+  // P0 FIX: Exclude OUT containers — same cnum can re-enter yard after release
+  const{data}=await sb.from('containers').select('cnum').eq('depot_id',currentDepot.id).neq('grade','OUT');
   return new Set((data||[]).map(c=>c.cnum));
 }
 async function loadOccupiedSlots(){
-  const{data}=await sb.from('containers').select('slot_key').eq('depot_id',currentDepot.id);
-  return new Set((data||[]).map(c=>c.slot_key));
+  // P0 FIX: Exclude OUT containers — OUT containers have null slot_key but filter anyway for safety
+  const{data}=await sb.from('containers').select('slot_key').eq('depot_id',currentDepot.id).neq('grade','OUT');
+  return new Set((data||[]).map(c=>c.slot_key).filter(k=>k));
 }
 function findNextFreeSlot(occupiedSet){
   for(let r=1;r<=ROWS;r++){
@@ -2263,11 +2301,11 @@ async function parseRows(rows){
   const hdr=rows[0].map(h=>String(h||'').toLowerCase().trim());
   const fi=kws=>hdr.findIndex(h=>kws.some(k=>h.includes(k)));
   const idx={cnum:fi(['container','cnum','soá','số','cont']),line:fi(['line','shipping','carrier','hang']),size:fi(['size','teu','type']),grade:fi(['grade','cond','status','st','tinh']),date:fi(['date','ngay','ngày']),slot:fi(['slot','position','bay','vi tri','bay/row']),remark:fi(['remark','note','ghi','comment'])};
-  // FIX 2A: Load existing cnums from DB to check duplicates
-  const{data:existingConts}=await sb.from('containers').select('cnum,slot_key').eq('depot_id',currentDepot.id);
+  // FIX 2A: Load existing cnums from DB to check duplicates (exclude OUT — re-entry allowed)
+  const{data:existingConts}=await sb.from('containers').select('cnum,slot_key,grade').eq('depot_id',currentDepot.id).neq('grade','OUT');
   const existingCnums=new Set((existingConts||[]).map(c=>c.cnum));
-  // FIX 2B: Load occupied slots from DB
-  const occupiedSlots=new Set((existingConts||[]).map(c=>c.slot_key));
+  // FIX 2B: Load occupied slots from DB (exclude OUT — released slots reusable)
+  const occupiedSlots=new Set((existingConts||[]).map(c=>c.slot_key).filter(k=>k));
 
   let added=0,skipped=0,duplicates=0;const inserts=[];
   for(let i=1;i<rows.length;i++){
@@ -2277,8 +2315,7 @@ async function parseRows(rows){
     // FIX 2C: Skip duplicates
     if(existingCnums.has(cnum)){duplicates++;continue}
     const line=matchLine(idx.line>=0?String(row[idx.line]||''):'');
-    const sr=(idx.size>=0?String(row[idx.size]||'40'):'40').replace(/[^0-9]/g,'');
-    const size=sr==='20'?'20':'40';
+    const size=matchSize(idx.size>=0?String(row[idx.size]||'40HC'):'40HC');
     const grade=matchGrade(idx.grade>=0?String(row[idx.grade]||'B'):'B');
     const dateRaw=(idx.date>=0?String(row[idx.date]||''):'').trim();
     const date=dateRaw?new Date(dateRaw.replace(/\//g,'-')).toISOString().slice(0,10):null;
