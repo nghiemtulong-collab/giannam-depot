@@ -406,7 +406,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
         <button class="sb-btn" onclick="loadDemo()">Load demo data</button>
         <button class="sb-btn" onclick="clearAll()">Clear yard</button>
       </div>
-      <div class="sb-footer">GN Logistics<br>ICD Cát Lái · Depot 3<br>v5.0 · 2026</div>
+      <div class="sb-footer">GN Logistics<br>ICD Cát Lái · Depot 3<br>v6.0 · 2026</div>
     </div>
 
     <!-- YARD VIEW -->
@@ -704,7 +704,24 @@ async function doLogout(){
 async function initApp(user){
   currentUser=user;
   // Load profile
-  const{data:prof}=await sb.from('profiles').select('*').eq('id',user.id).single();
+  const{data:prof,error:profErr}=await sb.from('profiles').select('*').eq('id',user.id).single();
+  // P0 SECURITY: block null/inactive profile
+  if(profErr||!prof){
+    await sb.auth.signOut();
+    const errEl=document.getElementById('login-err');
+    if(errEl)errEl.textContent='Tài khoản chưa được kích hoạt — liên hệ admin';
+    const btn=document.getElementById('login-btn');
+    if(btn){btn.disabled=false;btn.textContent='Đăng nhập'}
+    return;
+  }
+  if(prof.active===false){
+    await sb.auth.signOut();
+    const errEl=document.getElementById('login-err');
+    if(errEl)errEl.textContent='Tài khoản đã bị khóa — liên hệ admin';
+    const btn=document.getElementById('login-btn');
+    if(btn){btn.disabled=false;btn.textContent='Đăng nhập'}
+    return;
+  }
   currentProfile=prof;
   // Load depots
   const{data:deps}=await sb.from('depots').select('*').order('created_at');
@@ -1692,10 +1709,12 @@ async function parseLegacyFormat(rows,headerRow){
     inserts.push({
       depot_id:currentDepot.id,cnum,line,size,grade,
       date_in:date,remark:fullRemark||null,
+      est_cost:estCost,
       row_label:'R'+String(slotData.r).padStart(2,'0'),
       bay:slotData.b,tier:slotData.t,slot_key:slotData.key,
       // Pass through for importRowsToDepot
-      _row:slotData.r,_bay:slotData.b,_tier:slotData.t
+      _row:slotData.r,_bay:slotData.b,_tier:slotData.t,
+      estCost
     });
     added++;
   }
@@ -1711,6 +1730,7 @@ async function parseLegacyFormat(rows,headerRow){
       cnum: ins.cnum, line: ins.line, size: ins.size,
       grade: ins.grade, date: ins.date_in,
       remark: ins.remark, estCost: ins.estCost,
+      est_cost: ins.est_cost,
       _row: ins._row, _bay: ins._bay, _tier: ins._tier
     });
   }
@@ -1761,11 +1781,37 @@ async function parseStandardFormat(rows,headerRow){
     const remark=(idx.remark>=0?String(row[idx.remark]||''):'').trim()||null;
     const estCostRaw=idx.estcost>=0?String(row[idx.estcost]||'').trim():'';
     const estCost=estCostRaw&&!isNaN(parseFloat(estCostRaw))?parseFloat(estCostRaw):null;
-    const slot=findNextFreeSlot(occupiedSlots);
+    
+    // P0 FIX: use slot column if present (e.g. "R01-B12-T3" or "D25"), fallback to auto-assign
+    let parsedSlot=null;
+    if(idx.slot>=0){
+      const slotRaw=String(row[idx.slot]||'').trim();
+      // Try slot_key format first: R01-B12-T3
+      const skMatch=slotRaw.match(/^R(\d+)-B(\d+)-T(\d+)$/i);
+      if(skMatch){
+        parsedSlot={r:parseInt(skMatch[1]),b:parseInt(skMatch[2]),t:parseInt(skMatch[3])};
+      }else{
+        // Try Bay/Row format: D25, N08.03.01
+        parsedSlot=parseBayRowToSlot(slotRaw);
+      }
+    }
+    
+    let slot;
+    if(parsedSlot){
+      const candidateKey=sk(parsedSlot.r,parsedSlot.b,parsedSlot.t);
+      if(!occupiedSlots.has(candidateKey)){
+        slot={r:parsedSlot.r,b:parsedSlot.b,t:parsedSlot.t};
+      }else{
+        // Slot taken — try same row first, then global
+        slot=findNextFreeSlotInRow(occupiedSlots,parsedSlot.r)||findNextFreeSlot(occupiedSlots);
+      }
+    }else{
+      slot=findNextFreeSlot(occupiedSlots);
+    }
     if(!slot){skipped++;continue}
     const key=sk(slot.r,slot.b,slot.t);
     occupiedSlots.add(key);existingConts.add(cnum);
-    inserts.push({depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key});
+    inserts.push({depot_id:currentDepot.id,cnum,line,size,grade,date_in:date,remark,est_cost:estCost,row_label:'R'+String(slot.r).padStart(2,'0'),bay:slot.b,tier:slot.t,slot_key:key,estCost,_row:slot.r,_bay:slot.b,_tier:slot.t});
     added++;
   }
   // Group by DP code for cross-depot routing
@@ -1774,7 +1820,7 @@ async function parseStandardFormat(rows,headerRow){
     const dpM=ins.remark&&ins.remark.match(/\b(DP\d+)\b/i);
     const dpC=dpM?dpM[1].toUpperCase():(currentDepot?.code||'DEFAULT');
     if(!dpGroups2[dpC])dpGroups2[dpC]=[];
-    dpGroups2[dpC].push({cnum:ins.cnum,line:ins.line,size:ins.size,grade:ins.grade,date:ins.date_in,remark:ins.remark,estCost:ins.estCost});
+    dpGroups2[dpC].push({cnum:ins.cnum,line:ins.line,size:ins.size,grade:ins.grade,date:ins.date_in,remark:ins.remark,estCost:ins.estCost,est_cost:ins.est_cost,_row:ins._row,_bay:ins._bay,_tier:ins._tier});
   }
   const dpCodes2=Object.keys(dpGroups2);
   if(dpCodes2.length>1){
@@ -1811,26 +1857,37 @@ async function checkCrossDepot(parsedGroups){
   console.log('IMPORT STEP 4: checkCrossDepot groups=', Object.keys(parsedGroups), 'sizes=', Object.values(parsedGroups).map(v=>v.length));
   const dpCodes = Object.keys(parsedGroups);
 
-  // Single depot group → import directly
+  // Single depot group → check if DP matches current depot first
   if(dpCodes.length <= 1){
     const rows = Object.values(parsedGroups)[0] || [];
-    // FIX: Check if DP matches currentDepot - warn if not
     const dp = dpCodes[0];
+    // Normalize: extract trailing digit from DP and depot code/name for robust matching
+    const dpNum = dp ? (dp.match(/(\d+)$/)?.[1] || '') : '';
+    const cdNum = currentDepot?.code ? (currentDepot.code.match(/(\d+)$/)?.[1] || '') : '';
+    const cnNum = currentDepot?.name ? (currentDepot.name.match(/(\d+)\s*$/)?.[1] || '') : '';
     const dpMatchesCurrent = !dp || dp==='DEFAULT' ||
       currentDepot?.code?.toUpperCase()===dp.toUpperCase() ||
-      currentDepot?.name?.toUpperCase().includes(dp.toUpperCase());
+      currentDepot?.name?.toUpperCase().includes(dp.toUpperCase()) ||
+      (dpNum && (dpNum===cdNum || dpNum===cnNum));
+    
+    // Non-admin: block if DP mismatch
     if(!dpMatchesCurrent && !perm('canAdmin') && currentProfile?.role!=='manager'){
       notif('File này thuộc '+dp+' nhưng bạn đang ở depot '+currentDepot?.code+' — không có quyền');
       return;
     }
-    if(!dpMatchesCurrent && (perm('canAdmin')||currentProfile?.role==='manager')){
-      notif('Import '+rows.length+' cont ('+dp+') → '+(currentDepot?.name||''));
+    
+    // Match → direct import
+    if(dpMatchesCurrent){
+      await doDirectImport(rows);
+      return;
     }
-    await doDirectImport(rows);
-    return;
+    
+    // P0 FIX: Admin/manager + DP mismatch → FORCE routing modal, do NOT silently import
+    // (Old behavior: silent notif + doDirectImport into currentDepot — caused DP2 file imported into Depot 3)
+    console.log('IMPORT STEP 4b: single-DP mismatch — forcing routing modal');
   }
 
-  // Multi-depot detected - show modal for user to confirm routing
+  // Show routing modal (multi-depot OR single-DP mismatch for admin/manager)
   const{data:allDepots} = await sb.from('depots').select('*').order('created_at');
   
   const groups = {};
@@ -2137,6 +2194,8 @@ async function importRowsToDepot(rows, targetDepot){
       cnum: row.cnum, line: row.line, size: row.size,
       grade: row.grade, date_in: row.date,
       remark: row.remark || null,
+      est_cost: row.estCost ?? row.est_cost ?? null,
+      actual_cost: row.actualCost ?? row.actual_cost ?? null,
       row_label: 'R'+String(slotR).padStart(2,'0'),
       bay: slotB, tier: slotT, slot_key: slotKey
     });
